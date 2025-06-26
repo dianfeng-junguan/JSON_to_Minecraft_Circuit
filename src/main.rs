@@ -1,0 +1,293 @@
+use flate2::Compression;
+use std::{any::Any, fs::OpenOptions, io::Read, ops::Deref};
+use serde_derive::{Deserialize, Serialize};
+use mc_schem::{block::CommonBlock, region::WorldSlice, schem::{LitematicaSaveOption, Schematic}, Block, Region, VanillaStructureLoadOption};
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Position{
+    x: i32,
+    y: i32,
+    z: i32
+}
+impl Position {
+    pub fn to_slice(&self) -> [i32;3] {
+        [self.x,self.y,self.z]
+    }
+}
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize)]
+struct ImportItem{
+    modelName: String,
+    modelType: String,
+    path: String,
+}
+#[derive(Serialize, Deserialize)]
+///## Component
+/// 元件对象，存储在Circuit中
+/// 
+struct Component{
+    name: String,
+    model: String,
+    position: Position,
+}
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize)]
+struct Wire{
+    name: String,
+    start: Position,
+    end: Position,
+    baseMaterial: String,
+}
+#[derive(Serialize, Deserialize)]
+struct BlockInfo{
+    position: Position,
+    id:String
+}
+#[derive(Serialize, Deserialize)]
+struct Circuit{
+    name: String,
+    size: Position,
+    imports: Vec<ImportItem>,
+    components: Vec<Component>,
+    wires: Vec<Wire>,
+    blocks:Vec<BlockInfo>,
+    inputs:Vec<Position>,
+    outputs:Vec<Position>
+}
+trait ModelObject {
+    fn get_name(&self) -> &str;
+    fn get_type(&self) -> &str;
+    fn get_inputs(&self) -> &Vec<Position>;
+    fn get_outputs(&self) -> &Vec<Position>;
+    fn get_nbt_path(&self) -> Option<&str>;
+}
+#[derive(Serialize, Deserialize)]
+///## ComponentModelObject
+/// 元件导入模型对象
+/// 
+/// 包含元件的名称、类型、NBT、大小、输入、输出等信息
+struct ComponentModelObject {
+    name: String,
+    modelType: String,
+    nbt:String,
+    size: [i32;3],
+    inputs: Vec<Position>,
+    outputs: Vec<Position>,
+}
+impl ModelObject for ComponentModelObject {
+    fn get_name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_inputs(&self) -> &Vec<Position> {
+        &self.inputs
+    }
+
+    fn get_outputs(&self) -> &Vec<Position> {
+        &self.outputs
+    }
+    
+    fn get_type(&self) -> &str {
+        &self.modelType
+    }
+    
+    fn get_nbt_path(&self) -> std::option::Option<&str> {
+        Some(self.nbt.as_str())
+    }
+}
+impl ModelObject for Circuit {
+    fn get_name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_inputs(&self) -> &Vec<Position> {
+        &self.inputs
+    }
+
+    fn get_outputs(&self) -> &Vec<Position> {
+        &self.outputs
+    }
+    
+    fn get_type(&self) -> &str {
+        "circuit"
+    }
+    
+    fn get_nbt_path(&self) -> Option<&str> {
+        None
+    }
+}
+///## ModelObjectItem
+/// 一个用来包装ModelObject的结构体，包含内部
+/// ModelObject具体类型的信息。
+struct ModelObjectItem{
+
+}
+fn main() {
+    let mut args=std::env::args().collect::<Vec<String>>();
+    let mut input_json: String=String::new();
+    let mut output_path: String=String::new();
+    let mut decomp_path=String::new();
+    let mut decomp_flag=false;
+    args.remove(0);//去掉开头的程序名
+    for arg in args {
+        println!("arg: {}",arg);
+        match arg.as_str() {
+            "-v"=>println!("MC Circuit Script \nVersion 1.0.0"),
+            "-h"=> {
+                println!("Usage: mc_circuit_script [options] [input json] [output schematic name]");
+                println!("Options:");
+                println!("-v: Show version information");
+                println!("-h: Show help information");
+            },
+            "-d"=>{
+                decomp_flag=true;
+            }
+            _=>{
+                if decomp_flag {
+                    //反编译schematic为json
+                    decomp_flag=false;
+                    decomp_path.clone_from(&arg);
+                }
+                if input_json.len() == 0 {
+                    input_json.clone_from(&arg);
+                    println!("{}",input_json)
+                }else {
+                    output_path.clone_from(&arg);
+                }
+            }
+        }
+    }
+    if decomp_flag {
+       unimplemented!("Decompiling not implemented yet");
+    }
+    //编译成schematic
+    let mut jsonfile=OpenOptions::new()
+    .read(true)
+    .open(&input_json).expect("failed to open input json file");
+    let mut json_content=Vec::<u8>::new();
+    jsonfile.read_to_end(&mut json_content).unwrap();
+    let json_content=String::from_utf8_lossy(&json_content);
+    let obj:Circuit=serde_json::from_str(&json_content).unwrap_or_else(|x|{
+        panic!("failed to parse input json file {}:\n{}",&input_json,x.to_string());
+    });
+    //存放读取的元件和子电路json对象，缓存
+    let mut model_objects:Vec<Box<dyn ModelObject>>=vec![];
+    let mut schem:Schematic=Schematic::new();
+    //解析导入，存入缓存方便后面取用
+    for import_item in obj.imports {
+        let path=import_item.path.as_str();
+        let model_type=import_item.modelType.as_str();
+        let rd=OpenOptions::new().read(true)
+        .open(path).expect(format!("failed to open import file {}",path).as_str());
+        match model_type {
+            "component"=>{
+                //元件类型
+                let model_obj=Box::<ComponentModelObject>::new(serde_json::from_reader(rd).unwrap());
+                model_objects.push(model_obj);
+            },
+            "circuit"=>{
+                let model_obj=Box::<Circuit>::new(serde_json::from_reader(rd).unwrap());
+                model_objects.push(model_obj);
+            }
+            _=>{
+                panic!("Unsupported model type: {}",model_type);
+            }
+        }
+    }
+    //创建一个region
+    let global_region=Region::with_shape(obj.size.to_slice());
+    schem.regions.push(global_region);
+    let global_region=&mut schem.regions[0];
+    //解析元件
+    for component in obj.components {
+        println!("Component:{},Model:{},Position:({},{},{})",component.name,component.model,component.position.x,component.position.y,component.position.z);
+        let model_name=component.model.as_str();
+        //找到对应导入
+        let model_import_item=model_objects.iter().find(|&x| {
+            if x.get_name() == model_name {
+                return true;
+            }
+            false
+        }).unwrap_or_else(|| {
+            println!("Error: Model {} not found in imports",model_name);
+            panic!("Model {} not found in imports",model_name);
+        });
+        //根据不同的model_type进行处理，然后放置到schematic的region中
+        match model_import_item.get_type() {
+            "component"=>{
+                // 元件，寻找它的nbt
+                let nbt_path=model_import_item.get_nbt_path().unwrap();
+                let (mut nbt_obj,raw_meta)=Schematic::from_file(nbt_path).unwrap_or_else(|x|{panic!("failed to load nbt file {}",nbt_path)});
+                //nbt合并到一个region防止多个region
+                nbt_obj.merge_regions(&Block::air());
+                //放置到schem的region
+                let component_shape=nbt_obj.shape();
+                //开始放置
+                for x in 0..component_shape[0] {
+                    for y in 0..component_shape[1] {
+                        for z in 0..component_shape[2] {
+                            if let Some(blk)=nbt_obj.regions[0].block_at([x,y,z]) {
+                                global_region.set_block(
+                                    [x+component.position.x,
+                                    y+component.position.y,
+                                    z+component.position.z], 
+                                    blk).unwrap_or_else(|_|{
+                                        println!("failed to place block {} at ({},{},{})",blk.id,x+component.position.x,y+component.position.y,z+component.position.z);
+                                        let global_shape=global_region.shape();
+                                        if  global_shape[0]<=x||global_shape[1]<=y||global_shape[2]<=z {
+                                            panic!("block position out of range: ({},{},{}), the component size is ({},{},{})",
+                                            x+component.position.x,y+component.position.y,z+component.position.z,
+                                            component_shape[0],component_shape[1],component_shape[2]);
+                                        }
+                                    });
+                            }
+                        }
+                    }
+                }
+            },
+            "circuit"=>{
+                unimplemented!("Circuit import not implemented yet")
+            },
+            _=>{
+                panic!("Unsupported model type: {}",model_import_item.get_type());
+            }
+        }
+    }
+    //解析导线
+    for wire in obj.wires {
+        let base_block=Block::from_id(&wire.baseMaterial)
+        .expect("err: invalid base material");
+        let mut start_pos=wire.start.to_slice();
+        let mut end_pos=wire.end.to_slice();
+        fill_block(start_pos, end_pos, base_block, global_region);
+        start_pos[1]+=1;
+        end_pos[1]+=1;
+        //放置导线
+        fill_block(start_pos, end_pos, Block::from_id("redstone_wire").unwrap(), global_region);
+
+    }
+    //解析方块
+    for block in obj.blocks {
+        let block_id=block.id.as_str();
+        let block_pos=block.position.to_slice();
+        let block_block=Block::from_id(block_id)
+        .expect(format!("err: invalid block id {}",block_id).as_str());
+        global_region.set_block(block_pos,&block_block).unwrap();
+    }
+    //完毕，保存
+    let save_option=LitematicaSaveOption{
+        compress_level: Compression::default(),
+        rename_duplicated_regions: true, 
+    };
+    schem.save_litematica_file(&output_path, &save_option).expect("error: failed to save schematic file");
+    println!("Schematic saved to {}",output_path);
+}
+
+fn fill_block(start:[i32;3],end:[i32;3],block:Block,region:&mut Region){
+    for x in start[0]..=end[0] {
+        for y in start[1]..=end[1] {
+            for z in start[2]..=end[2] {
+                region.set_block([x,y,z],&block).unwrap();
+            }
+        }
+    }
+}
