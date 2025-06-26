@@ -123,7 +123,7 @@
     ]
 }
 ```
-
+注：这里的nbt可以是nbt, litematic和schematic文件。
 
 ## 编译
 
