@@ -1,5 +1,5 @@
 use flate2::Compression;
-use std::{any::Any, fs::OpenOptions, io::Read, ops::Deref};
+use std::{any::Any, fs::OpenOptions, io::{Read, Write}, ops::Deref};
 use serde_derive::{Deserialize, Serialize};
 use mc_schem::{block::CommonBlock, region::WorldSlice, schem::{LitematicaSaveOption, Schematic}, Block, Region, VanillaStructureLoadOption};
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +127,8 @@ fn main() {
     let mut output_path: String=String::new();
     let mut decomp_path=String::new();
     let mut decomp_flag=false;
+    ///生成schematic的时候是否附带生成把它视为component的json文件
+    let mut genereate_component_flag=false;
     args.remove(0);//去掉开头的程序名
     for arg in args {
         println!("arg: {}",arg);
@@ -137,9 +139,17 @@ fn main() {
                 println!("Options:");
                 println!("-v: Show version information");
                 println!("-h: Show help information");
+                println!("-d: Decompile schematic to json");
+                println!("-g: Generate component json file for output schematic");
+                println!("Example:");
+                println!("mc_circuit_script input.json output.schematic");
+                println!("mc_circuit_script -d input.schematic output.json");
             },
             "-d"=>{
                 decomp_flag=true;
+            },
+            "-g"=>{
+                genereate_component_flag=true;
             }
             _=>{
                 if decomp_flag {
@@ -150,7 +160,7 @@ fn main() {
                 if input_json.len() == 0 {
                     input_json.clone_from(&arg);
                     println!("{}",input_json)
-                }else {
+                }else if output_path.len() == 0 {
                     output_path.clone_from(&arg);
                 }
             }
@@ -278,6 +288,24 @@ fn main() {
         compress_level: Compression::default(),
         rename_duplicated_regions: true, 
     };
+    //生成对应component的json文件
+    if genereate_component_flag {
+        let component_json=ComponentModelObject{
+            name: obj.name.clone(),
+            modelType: "component".to_string(),
+            nbt: output_path.to_string(),
+            size: obj.size.to_slice(),
+            inputs: obj.inputs.clone(),
+            outputs: obj.outputs.clone(),
+        };
+        let mut component_json=serde_json::to_string(&component_json).unwrap();
+        let mut component_file=OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(format!("{}.json",output_path)).unwrap();
+        component_file.write_all(component_json.as_bytes()).unwrap();
+        println!("Component json file saved to {}.json",output_path);
+    }
     schem.save_litematica_file(&output_path, &save_option).expect("error: failed to save schematic file");
     println!("Schematic saved to {}",output_path);
 }

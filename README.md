@@ -134,6 +134,8 @@ cargo build
 ## 使用方法
 
 ```bash
-./mc_circuit_script <project_json_file> <output_schematic_file> [-h|-v]
+./mc_circuit_script <project_json_file> <output_schematic_file> [-h|-v|-g]
 ```
+
+-g: 给output_schematic_file生成元件json
 
