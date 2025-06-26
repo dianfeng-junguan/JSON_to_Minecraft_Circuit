@@ -1,3 +1,5 @@
+use ansi_term::Color::{*};
+use clap::Parser;
 use flate2::Compression;
 use std::{any::Any, fs::OpenOptions, io::{Read, Write}, ops::Deref};
 use serde_derive::{Deserialize, Serialize};
@@ -121,53 +123,32 @@ impl ModelObject for Circuit {
 struct ModelObjectItem{
 
 }
+
+#[derive(Parser,Debug)]
+#[command(version("1.0.0"),about, long_about=None)]
+struct CommandLineArgs{
+    #[clap(short, long)]
+    input_json: String,
+    #[clap(short, long)]
+    output_path: String,
+    #[clap(short, long)]
+    decomp_path: Option<String>,
+    #[clap(short, long)]
+    generate_component_json: bool,
+    #[clap(short, long)]
+    check_circuit:bool//检查电路的连接，红石可达性等
+}
 fn main() {
-    let mut args=std::env::args().collect::<Vec<String>>();
-    let mut input_json: String=String::new();
-    let mut output_path: String=String::new();
-    let mut decomp_path=String::new();
-    let mut decomp_flag=false;
-    ///生成schematic的时候是否附带生成把它视为component的json文件
-    let mut genereate_component_flag=false;
-    args.remove(0);//去掉开头的程序名
-    for arg in args {
-        println!("arg: {}",arg);
-        match arg.as_str() {
-            "-v"=>println!("MC Circuit Script \nVersion 1.0.0"),
-            "-h"=> {
-                println!("Usage: mc_circuit_script [options] [input json] [output schematic name]");
-                println!("Options:");
-                println!("-v: Show version information");
-                println!("-h: Show help information");
-                println!("-d: Decompile schematic to json");
-                println!("-g: Generate component json file for output schematic");
-                println!("Example:");
-                println!("mc_circuit_script input.json output.schematic");
-                println!("mc_circuit_script -d input.schematic output.json");
-            },
-            "-d"=>{
-                decomp_flag=true;
-            },
-            "-g"=>{
-                genereate_component_flag=true;
-            }
-            _=>{
-                if decomp_flag {
-                    //反编译schematic为json
-                    decomp_flag=false;
-                    decomp_path.clone_from(&arg);
-                }
-                if input_json.len() == 0 {
-                    input_json.clone_from(&arg);
-                    println!("{}",input_json)
-                }else if output_path.len() == 0 {
-                    output_path.clone_from(&arg);
-                }
-            }
-        }
-    }
+    let args=CommandLineArgs::parse();
+    let input_json=args.input_json;
+    let output_path=args.output_path;
+    let decomp_path=args.decomp_path.unwrap_or_default();
+    let decomp_flag=false;
+    //生成schematic的时候是否附带生成把它视为component的json文件
+    let genereate_component_flag=args.generate_component_json;
     if decomp_flag {
-       unimplemented!("Decompiling not implemented yet");
+        error_begin();
+        unimplemented!("Decompiling not implemented yet");
     }
     //编译成schematic
     let mut jsonfile=OpenOptions::new()
@@ -177,8 +158,10 @@ fn main() {
     jsonfile.read_to_end(&mut json_content).unwrap();
     let json_content=String::from_utf8_lossy(&json_content);
     let obj:Circuit=serde_json::from_str(&json_content).unwrap_or_else(|x|{
+        error_begin();
         panic!("failed to parse input json file {}:\n{}",&input_json,x.to_string());
     });
+
     //存放读取的元件和子电路json对象，缓存
     let mut model_objects:Vec<Box<dyn ModelObject>>=vec![];
     let mut schem:Schematic=Schematic::new();
@@ -199,10 +182,20 @@ fn main() {
                 model_objects.push(model_obj);
             }
             _=>{
+                error_begin();
                 panic!("Unsupported model type: {}",model_type);
             }
         }
     }
+
+    
+    //检查电路
+    if args.check_circuit && !check_circuit(&obj, &model_objects){
+        error_begin();
+        println!("Error: circuit check failed. Stop compiling.");
+        return;
+    }
+    //下面开始编译
     //创建一个region
     let global_region=Region::with_shape(obj.size.to_slice());
     schem.regions.push(global_region);
@@ -218,6 +211,7 @@ fn main() {
             }
             false
         }).unwrap_or_else(|| {
+            error_begin();
             println!("Error: Model {} not found in imports",model_name);
             panic!("Model {} not found in imports",model_name);
         });
@@ -255,9 +249,11 @@ fn main() {
                 }
             },
             "circuit"=>{
+                error_begin();
                 unimplemented!("Circuit import not implemented yet")
             },
             _=>{
+                error_begin();
                 panic!("Unsupported model type: {}",model_import_item.get_type());
             }
         }
@@ -310,6 +306,10 @@ fn main() {
     println!("Schematic saved to {}",output_path);
 }
 
+fn check_circuit(obj: &Circuit, model_objects: &[Box<dyn ModelObject>]) -> bool {
+    todo!("检查电路的连接，红石可达性等")
+}
+
 fn fill_block(start:[i32;3],end:[i32;3],block:Block,region:&mut Region){
     for x in start[0]..=end[0] {
         for y in start[1]..=end[1] {
@@ -318,4 +318,7 @@ fn fill_block(start:[i32;3],end:[i32;3],block:Block,region:&mut Region){
             }
         }
     }
+}
+fn error_begin(){
+    print!("{}",Red.paint("error:"));
 }

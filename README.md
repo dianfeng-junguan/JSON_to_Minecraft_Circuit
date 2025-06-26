@@ -110,7 +110,7 @@
 ```json
 {
     "name":"and",
-    "type":"component",
+    "modelType":"component",
     "nbt":"and.nbt",
     "size":[2,2,2],
     "inputs":[
@@ -133,9 +133,9 @@ cargo build
 
 ## 使用方法
 
+请见
 ```bash
-./mc_circuit_script <project_json_file> <output_schematic_file> [-h|-v|-g]
+./mc_circuit_script -h
 ```
 
--g: 给output_schematic_file生成元件json
 
