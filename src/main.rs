@@ -1,3 +1,5 @@
+use ansi_term::Color::{*};
+use clap::Parser;
 use flate2::Compression;
 use std::{any::Any, fs::OpenOptions, io::{Read, Write}, ops::Deref};
 use serde_derive::{Deserialize, Serialize};
@@ -121,16 +123,28 @@ impl ModelObject for Circuit {
 struct ModelObjectItem{
 
 }
+
+#[derive(Parser,Debug)]
+#[command(version("1.0.0"),about, long_about=None)]
+struct CommandLineArgs{
+    #[clap(short, long)]
+    input_json: String,
+    #[clap(short, long)]
+    output_path: String,
+    #[clap(short, long)]
+    decomp_path: Option<String>,
+    #[clap(short, long)]
+    generate_component_json: bool,
+}
 fn main() {
-    let mut args=std::env::args().collect::<Vec<String>>();
-    let mut input_json: String=String::new();
-    let mut output_path: String=String::new();
-    let mut decomp_path=String::new();
-    let mut decomp_flag=false;
-    ///生成schematic的时候是否附带生成把它视为component的json文件
-    let mut genereate_component_flag=false;
-    args.remove(0);//去掉开头的程序名
-    for arg in args {
+    let args=CommandLineArgs::parse();
+    let input_json=args.input_json;
+    let output_path=args.output_path;
+    let decomp_path=args.decomp_path.unwrap_or_default();
+    let decomp_flag=false;
+    //生成schematic的时候是否附带生成把它视为component的json文件
+    let genereate_component_flag=args.generate_component_json;
+    /* for arg in args {
         println!("arg: {}",arg);
         match arg.as_str() {
             "-v"=>println!("MC Circuit Script \nVersion 1.0.0"),
@@ -165,9 +179,10 @@ fn main() {
                 }
             }
         }
-    }
+    } */
     if decomp_flag {
-       unimplemented!("Decompiling not implemented yet");
+        error_begin();
+        unimplemented!("Decompiling not implemented yet");
     }
     //编译成schematic
     let mut jsonfile=OpenOptions::new()
@@ -177,6 +192,7 @@ fn main() {
     jsonfile.read_to_end(&mut json_content).unwrap();
     let json_content=String::from_utf8_lossy(&json_content);
     let obj:Circuit=serde_json::from_str(&json_content).unwrap_or_else(|x|{
+        error_begin();
         panic!("failed to parse input json file {}:\n{}",&input_json,x.to_string());
     });
     //存放读取的元件和子电路json对象，缓存
@@ -199,6 +215,7 @@ fn main() {
                 model_objects.push(model_obj);
             }
             _=>{
+                error_begin();
                 panic!("Unsupported model type: {}",model_type);
             }
         }
@@ -218,6 +235,7 @@ fn main() {
             }
             false
         }).unwrap_or_else(|| {
+            error_begin();
             println!("Error: Model {} not found in imports",model_name);
             panic!("Model {} not found in imports",model_name);
         });
@@ -255,9 +273,11 @@ fn main() {
                 }
             },
             "circuit"=>{
+                error_begin();
                 unimplemented!("Circuit import not implemented yet")
             },
             _=>{
+                error_begin();
                 panic!("Unsupported model type: {}",model_import_item.get_type());
             }
         }
@@ -318,4 +338,7 @@ fn fill_block(start:[i32;3],end:[i32;3],block:Block,region:&mut Region){
             }
         }
     }
+}
+fn error_begin(){
+    print!("{}",Red.paint("error:"));
 }

@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ansi_term = "0.12.1"
+clap = { version = "4.5.40", features = ["derive"] }
 flate2 = "1.1.2"
 mc_schem = "1.1.2"
 serde = "1.0.219"
