@@ -1,0 +1,28 @@
+{
+    "configurations": [
+        {
+            "name": "(Windows) 启动",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/target/debug/mc_circuit_script.exe",
+            "args": [
+                "-i",
+                "testch.json",
+                "-o",
+                "testch.lithematic",
+                "-c",
+                "-l",
+                "lib"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                {
+                    "name": "RUST_BACKTRACE",
+                    "value": "1"
+                }
+            ],
+            "console": "externalTerminal"
+        }
+    ]
+}

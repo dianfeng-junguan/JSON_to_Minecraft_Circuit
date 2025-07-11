@@ -1,10 +1,13 @@
+mod check;
 use ansi_term::Color::{*};
 use clap::Parser;
 use flate2::Compression;
-use std::{any::Any, fs::OpenOptions, io::{Read, Write}, ops::Deref};
+use std::{any::Any, fmt::Display, fs::OpenOptions, io::{Read, Write}, ops::Add};
 use serde_derive::{Deserialize, Serialize};
-use mc_schem::{block::CommonBlock, region::WorldSlice, schem::{LitematicaSaveOption, Schematic}, Block, Region, VanillaStructureLoadOption};
-#[derive(Debug, Clone, Serialize, Deserialize)]
+use mc_schem::{region::WorldSlice, schem::{LitematicaSaveOption, Schematic}, Block, Region};
+use std::collections::{HashMap, HashSet};
+use check::*;
+#[derive(Debug, Clone, Serialize, Deserialize,PartialEq, Eq,Hash,Copy)]
 struct Position{
     x: i32,
     y: i32,
@@ -15,6 +18,23 @@ impl Position {
         [self.x,self.y,self.z]
     }
 }
+impl Add for Position {
+    type Output=Position;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Position
+        {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+            z: self.z + rhs.z
+        }
+    }
+}
+impl Display for Position {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f,"({},{},{})",self.x,self.y,self.z)
+    }
+}
 #[allow(non_snake_case)]
 #[derive(Serialize, Deserialize)]
 struct ImportItem{
@@ -22,7 +42,7 @@ struct ImportItem{
     modelType: String,
     path: String,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize,Clone)]
 ///## Component
 /// 元件对象，存储在Circuit中
 /// 
@@ -39,10 +59,31 @@ struct Wire{
     end: Position,
     baseMaterial: String,
 }
+#[derive(Serialize, Deserialize,Clone)]
+struct Properties{
+    facing: String,
+    delay: i32,
+    locked: bool,
+    powered: bool,
+    power: i32
+}
+impl Display for Properties {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f,"{{\n facing:{},\n delay:{},\n locked:{},\n powered:{},\n power:{}}}",
+            self.facing,self.delay,self.locked,self.powered,self.power);
+            Ok(())
+    }
+}
+impl Default for Properties {
+    fn default() -> Self {
+        Self { facing: Default::default(), delay: Default::default(), locked: Default::default(), powered: Default::default(), power: Default::default() }
+    }
+}
 #[derive(Serialize, Deserialize)]
 struct BlockInfo{
     position: Position,
-    id:String
+    id:String,
+    properties:Option<Properties>
 }
 #[derive(Serialize, Deserialize)]
 struct Circuit{
@@ -55,12 +96,13 @@ struct Circuit{
     inputs:Vec<Position>,
     outputs:Vec<Position>
 }
-trait ModelObject {
+trait ModelObject:Any {
     fn get_name(&self) -> &str;
     fn get_type(&self) -> &str;
     fn get_inputs(&self) -> &Vec<Position>;
     fn get_outputs(&self) -> &Vec<Position>;
     fn get_nbt_path(&self) -> Option<&str>;
+    fn as_any(&self) -> &dyn Any;
 }
 #[derive(Serialize, Deserialize)]
 ///## ComponentModelObject
@@ -95,6 +137,10 @@ impl ModelObject for ComponentModelObject {
     fn get_nbt_path(&self) -> std::option::Option<&str> {
         Some(self.nbt.as_str())
     }
+    
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 impl ModelObject for Circuit {
     fn get_name(&self) -> &str {
@@ -116,6 +162,10 @@ impl ModelObject for Circuit {
     fn get_nbt_path(&self) -> Option<&str> {
         None
     }
+    
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 ///## ModelObjectItem
 /// 一个用来包装ModelObject的结构体，包含内部
@@ -136,7 +186,9 @@ struct CommandLineArgs{
     #[clap(short, long)]
     generate_component_json: bool,
     #[clap(short, long)]
-    check_circuit:bool//检查电路的连接，红石可达性等
+    check_circuit:bool,//检查电路的连接，红石可达性等
+    #[clap(short,long)]
+    library:Option<String>//导入的组件库
 }
 fn main() {
     let args=CommandLineArgs::parse();
@@ -166,11 +218,17 @@ fn main() {
     let mut model_objects:Vec<Box<dyn ModelObject>>=vec![];
     let mut schem:Schematic=Schematic::new();
     //解析导入，存入缓存方便后面取用
-    for import_item in obj.imports {
-        let path=import_item.path.as_str();
+    for import_item in obj.imports.iter() {
+        let path={
+            if let Some(library_path)=args.library.clone() {
+                library_path+"/"+import_item.path.as_str()
+            }else {
+                import_item.path.clone()
+            }
+        };
         let model_type=import_item.modelType.as_str();
         let rd=OpenOptions::new().read(true)
-        .open(path).expect(format!("failed to open import file {}",path).as_str());
+        .open(&path).expect(format!("failed to open import file {}",&path).as_str());
         match model_type {
             "component"=>{
                 //元件类型
@@ -194,6 +252,8 @@ fn main() {
         error_begin();
         println!("Error: circuit check failed. Stop compiling.");
         return;
+    }else if args.check_circuit {
+        println!("check done. No problem found.")
     }
     //下面开始编译
     //创建一个region
@@ -219,8 +279,15 @@ fn main() {
         match model_import_item.get_type() {
             "component"=>{
                 // 元件，寻找它的nbt
-                let nbt_path=model_import_item.get_nbt_path().unwrap();
-                let (mut nbt_obj,raw_meta)=Schematic::from_file(nbt_path).unwrap_or_else(|x|{panic!("failed to load nbt file {}",nbt_path)});
+                let nbt_path={
+                    let relative=model_import_item.get_nbt_path().unwrap();
+                    if let Some(library_path) = args.library.as_ref()  {
+                        library_path.to_owned()+"/"+relative
+                    }else {
+                        relative.to_string()
+                    }
+                };
+                let (mut nbt_obj,raw_meta)=Schematic::from_file(&nbt_path).unwrap_or_else(|x|{panic!("failed to load nbt file {}",nbt_path)});
                 //nbt合并到一个region防止多个region
                 nbt_obj.merge_regions(&Block::air());
                 //放置到schem的region
@@ -306,9 +373,6 @@ fn main() {
     println!("Schematic saved to {}",output_path);
 }
 
-fn check_circuit(obj: &Circuit, model_objects: &[Box<dyn ModelObject>]) -> bool {
-    todo!("检查电路的连接，红石可达性等")
-}
 
 fn fill_block(start:[i32;3],end:[i32;3],block:Block,region:&mut Region){
     for x in start[0]..=end[0] {
@@ -320,5 +384,5 @@ fn fill_block(start:[i32;3],end:[i32;3],block:Block,region:&mut Region){
     }
 }
 fn error_begin(){
-    print!("{}",Red.paint("error:"));
+    print!("{}",Red.paint("error: "));
 }

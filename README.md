@@ -49,7 +49,13 @@
     "blocks":[
         {
             "position":{"x":0,"y":0,"z":0},
-            "id":"repeator"
+            "id":"repeator",
+            "properties":{
+                "facing":"south",
+                "delay":1,
+                "locked":false,
+                "powered":false
+            }
         }
     ],
     "inputs":[
