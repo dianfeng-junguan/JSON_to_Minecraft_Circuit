@@ -59,11 +59,11 @@
         }
     ],
     "inputs":[
-        {"x":0,"y":0,"z":0},
+        {"name":"input001","position":{"x":0,"y":0,"z":0}},
         ...
     ],
     "outputs":[
-        {"x":1,"y":0,"z":0},
+        {"name":"output001","position":{"x":1,"y":0,"z":0}},
         ...
     ]
 }

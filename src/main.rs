@@ -85,6 +85,11 @@ struct BlockInfo{
     id:String,
     properties:Option<Properties>
 }
+#[derive(Serialize, Deserialize,Clone)]
+struct Port{
+    name: String,
+    position: Position,
+}
 #[derive(Serialize, Deserialize)]
 struct Circuit{
     name: String,
@@ -93,14 +98,14 @@ struct Circuit{
     components: Vec<Component>,
     wires: Vec<Wire>,
     blocks:Vec<BlockInfo>,
-    inputs:Vec<Position>,
-    outputs:Vec<Position>
+    inputs:Vec<Port>,
+    outputs:Vec<Port>
 }
 trait ModelObject:Any {
     fn get_name(&self) -> &str;
     fn get_type(&self) -> &str;
-    fn get_inputs(&self) -> &Vec<Position>;
-    fn get_outputs(&self) -> &Vec<Position>;
+    fn get_inputs(&self) -> &Vec<Port>;
+    fn get_outputs(&self) -> &Vec<Port>;
     fn get_nbt_path(&self) -> Option<&str>;
     fn as_any(&self) -> &dyn Any;
 }
@@ -114,19 +119,19 @@ struct ComponentModelObject {
     modelType: String,
     nbt:String,
     size: [i32;3],
-    inputs: Vec<Position>,
-    outputs: Vec<Position>,
+    inputs: Vec<Port>,
+    outputs: Vec<Port>,
 }
 impl ModelObject for ComponentModelObject {
     fn get_name(&self) -> &str {
         &self.name
     }
 
-    fn get_inputs(&self) -> &Vec<Position> {
+    fn get_inputs(&self) -> &Vec<Port> {
         &self.inputs
     }
 
-    fn get_outputs(&self) -> &Vec<Position> {
+    fn get_outputs(&self) -> &Vec<Port> {
         &self.outputs
     }
     
@@ -147,11 +152,11 @@ impl ModelObject for Circuit {
         &self.name
     }
 
-    fn get_inputs(&self) -> &Vec<Position> {
+    fn get_inputs(&self) -> &Vec<Port> {
         &self.inputs
     }
 
-    fn get_outputs(&self) -> &Vec<Position> {
+    fn get_outputs(&self) -> &Vec<Port> {
         &self.outputs
     }
     
@@ -188,7 +193,9 @@ struct CommandLineArgs{
     #[clap(short, long)]
     check_circuit:bool,//检查电路的连接，红石可达性等
     #[clap(short,long)]
-    library:Option<String>//导入的组件库
+    library:Option<String>,//导入的组件库
+    #[clap(long)]
+    graph_json:bool//生成连接图的json文件
 }
 fn main() {
     let args=CommandLineArgs::parse();
@@ -254,6 +261,15 @@ fn main() {
         return;
     }else if args.check_circuit {
         println!("check done. No problem found.")
+    }
+    if args.graph_json {
+        let graphstr=serde_json::to_string(&create_graph(&obj, &model_objects)).unwrap();
+        let mut graphjson=OpenOptions::new().write(true).create(true).truncate(true).open(output_path.clone()+"_graph.json").unwrap_or_else(|e| {
+            error_begin();
+            panic!("failed to open graph json file {}",output_path.clone()+"_graph.json");
+        });
+        graphjson.write(graphstr.as_bytes()).expect("failed to write graph json file");
+        println!("generated graph json file {}_graph.json",output_path);
     }
     //下面开始编译
     //创建一个region
@@ -358,13 +374,13 @@ fn main() {
             modelType: "component".to_string(),
             nbt: output_path.to_string(),
             size: obj.size.to_slice(),
-            inputs: obj.inputs.clone(),
-            outputs: obj.outputs.clone(),
+            inputs: obj.inputs.clone().iter_mut().enumerate().map(|(i,p)| {p.name=format!("input{}",i);p.clone()}).collect(),
+            outputs: obj.outputs.clone().iter_mut().enumerate().map(|(i,p)| {p.name=format!("output{}",i);p.clone()}).collect(),
         };
         let mut component_json=serde_json::to_string(&component_json).unwrap();
         let mut component_file=OpenOptions::new()
         .write(true)
-        .create(true)
+        .create(true).truncate(true)
         .open(format!("{}.json",output_path)).unwrap();
         component_file.write_all(component_json.as_bytes()).unwrap();
         println!("Component json file saved to {}.json",output_path);

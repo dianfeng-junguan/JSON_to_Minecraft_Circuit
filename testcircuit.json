@@ -9,7 +9,6 @@
             "path":"./test.json"
         }
     ],
-    "circuit":{
         "components":[
             {
                 "name":"and001",
@@ -43,8 +42,7 @@
                 "position":{"x":0,"y":0,"z":0},
                 "id":"repeator"
             }
-        ]
-    },
+        ],
     "inputs":[
         {"x":0,"y":0,"z":0}
     ],

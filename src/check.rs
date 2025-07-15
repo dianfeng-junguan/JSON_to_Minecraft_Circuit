@@ -1,7 +1,7 @@
 use crate::*;
 
 // 定义数据结构
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Dot {
     pos: Position,
     distance: i32,   // 自起点的距离
@@ -17,7 +17,7 @@ impl Display for Dot {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Edge {
     start: usize,
     end: usize,
@@ -25,7 +25,7 @@ struct Edge {
     direct: EdgeDirect, // 单向还是双向
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 enum EdgeDirect {
     Bidirectional,
     Reversed,
@@ -45,7 +45,7 @@ impl Display for EdgeDirect {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 enum NodeType {
     Input,
     Output,
@@ -88,7 +88,8 @@ impl From<&str> for GlobalDirection {
         }
     }
 }
-struct Graph {
+#[derive(Serialize, Deserialize)]
+pub struct Graph {
     dots: Vec<Dot>,
     edges: Vec<Edge>,
     outputs: Vec<Dot>,
@@ -97,109 +98,15 @@ struct Graph {
 
 pub fn check_circuit(obj: &Circuit, model_objects: &Vec<Box<dyn ModelObject>>) -> bool {
     // 构建图
-    let mut graph = Graph::new();
     let mut isok = true;
 
-    // 添加输入和输出节点
-    for &pos in &obj.inputs {
-        graph.add_dot(Dot {
-            pos,
-            distance: i32::MAX,
-            type_: NodeType::Output, //外部输入在内部视为输出
-        });
+    let graph = create_graph(obj, model_objects);
+    if graph.is_none() {
+        error_begin();
+        println!("failed to construct graph from circuit");
+        return false;
     }
-    //从ComponentModel中获取输入输出节点
-    for comp in &obj.components {
-        let model = model_objects.iter().find(|m| m.get_name() == comp.model);
-        if model.is_none() {
-            error_begin();
-            println!("Error: 模型 {} 不存在", comp.model);
-            return false;
-        }
-        let model = model.unwrap();
-
-        model.get_inputs().iter().for_each(|&pos| {
-            graph.add_dot(Dot {
-                pos: pos + comp.position,
-                distance: i32::MAX,
-                type_: NodeType::Input,
-            });
-        });
-        model.get_outputs().iter().for_each(|&pos| {
-            graph.add_dot(Dot {
-                pos: pos + comp.position,
-                distance: i32::MAX,
-                type_: NodeType::Output,
-            });
-        });
-    }
-
-    // 添加导线节点和边
-    for wire in &obj.wires {
-        let start_idx = graph.find_dot_or_add(wire.start.clone());
-        let end_idx = graph.find_dot_or_add(wire.end.clone());
-        let mut direct = EdgeDirect::Bidirectional;
-        let mut conflict = false;
-        // 检查导线上的中继器
-        let positions = wire_positions(&wire.start, &wire.end);
-        for pos in positions {
-            if let Some(block) = obj.blocks.iter().find(|b| b.position == pos) {
-                if block.id.contains("repeater") {
-                    let new_direct = match repeater_direction(&pos, &obj.blocks, {
-                        if wire.start.x < wire.end.x {
-                            GlobalDirection::East
-                        } else if wire.start.x > wire.end.x {
-                            GlobalDirection::West
-                        } else if wire.start.z < wire.end.z {
-                            GlobalDirection::South
-                        } else {
-                            GlobalDirection::North
-                        }
-                    }) {
-                        Some(RepeaterDirection::Forward) => EdgeDirect::Nonreversed,
-                        Some(RepeaterDirection::Backward) => EdgeDirect::Reversed,
-                        None => EdgeDirect::Bidirectional, // 默认双向
-                    };
-                    if direct == EdgeDirect::Nonreversed && new_direct == EdgeDirect::Reversed
-                        || direct == EdgeDirect::Reversed && new_direct == EdgeDirect::Nonreversed
-                    {
-                        error_begin();
-                        println!(
-                            "a wire has two for more repeaters whose directions are opposite:{},starting from {} to {}, ignoring this wire",
-                            wire.name, wire.start, wire.end
-                        );
-                        isok = false;
-                        conflict = true;
-                    } else {
-                        direct = new_direct;
-                    }
-                }
-            }
-        }
-        if !conflict {
-            graph.add_edge(Edge {
-                start: start_idx,
-                end: end_idx,
-                length: wire_length(&wire.start, &wire.end),
-                direct,
-            });
-        }
-        //线的首尾节点为导线上的节点
-        if graph.dots.iter().find(|d| d.pos == wire.start).is_none() {
-            graph.add_dot(Dot {
-                pos: wire.start.clone(),
-                distance: 0,
-                type_: NodeType::Output,
-            });
-        }
-        if graph.dots.iter().find(|d| d.pos == wire.end).is_some() {
-            graph.add_dot(Dot {
-                pos: wire.end.clone(),
-                distance: 0,
-                type_: NodeType::Output,
-            });
-        }
-    }
+    let graph = graph.unwrap();
 
     #[cfg(debug_assertions)]
     println!("dots:");
@@ -482,3 +389,118 @@ fn repeater_direction(
 }
 
 const MAX_REDSTONE_DISTANCE: i32 = 15; // 红石的最大传播距离
+
+///
+/// ## 构建连接图，表示元件端口之间的连接关系。
+///
+/// circuit: 电路的元数据
+///
+/// model_objects: 模型对象列表
+///
+pub fn create_graph(circuit: &Circuit, model_objects: &Vec<Box<dyn ModelObject>>) -> Option<Graph> {
+    // 构建图
+    let mut graph = Graph::new();
+    let mut isok = true;
+
+    // 添加输入和输出节点
+    for port in &circuit.inputs {
+        graph.add_dot(Dot {
+            pos: port.position,
+            distance: i32::MAX,
+            type_: NodeType::Output, //外部输入在内部视为输出
+        });
+    }
+    //从ComponentModel中获取输入输出节点
+    for comp in &circuit.components {
+        let model = model_objects.iter().find(|m| m.get_name() == comp.model);
+        if model.is_none() {
+            error_begin();
+            println!("Error: 模型 {} 不存在", comp.model);
+            return None;
+        }
+        let model = model.unwrap();
+
+        model.get_inputs().iter().for_each(|port| {
+            graph.add_dot(Dot {
+                pos: port.position + comp.position,
+                distance: i32::MAX,
+                type_: NodeType::Input,
+            });
+        });
+        model.get_outputs().iter().for_each(|port| {
+            graph.add_dot(Dot {
+                pos: port.position + comp.position,
+                distance: i32::MAX,
+                type_: NodeType::Output,
+            });
+        });
+    }
+
+    // 添加导线节点和边
+    for wire in &circuit.wires {
+        let start_idx = graph.find_dot_or_add(wire.start.clone());
+        let end_idx = graph.find_dot_or_add(wire.end.clone());
+        let mut direct = EdgeDirect::Bidirectional;
+        let mut conflict = false;
+        // 检查导线上的中继器
+        let positions = wire_positions(&wire.start, &wire.end);
+        for pos in positions {
+            if let Some(block) = circuit.blocks.iter().find(|b| b.position == pos) {
+                if block.id.contains("repeater") {
+                    let new_direct = match repeater_direction(&pos, &circuit.blocks, {
+                        if wire.start.x < wire.end.x {
+                            GlobalDirection::East
+                        } else if wire.start.x > wire.end.x {
+                            GlobalDirection::West
+                        } else if wire.start.z < wire.end.z {
+                            GlobalDirection::South
+                        } else {
+                            GlobalDirection::North
+                        }
+                    }) {
+                        Some(RepeaterDirection::Forward) => EdgeDirect::Nonreversed,
+                        Some(RepeaterDirection::Backward) => EdgeDirect::Reversed,
+                        None => EdgeDirect::Bidirectional, // 默认双向
+                    };
+                    if direct == EdgeDirect::Nonreversed && new_direct == EdgeDirect::Reversed
+                        || direct == EdgeDirect::Reversed && new_direct == EdgeDirect::Nonreversed
+                    {
+                        error_begin();
+                        println!(
+                            "a wire has two for more repeaters whose directions are opposite:{},starting from {} to {}, ignoring this wire",
+                            wire.name, wire.start, wire.end
+                        );
+                        isok = false;
+                        conflict = true;
+                    } else {
+                        direct = new_direct;
+                    }
+                }
+            }
+        }
+        if !conflict {
+            graph.add_edge(Edge {
+                start: start_idx,
+                end: end_idx,
+                length: wire_length(&wire.start, &wire.end),
+                direct,
+            });
+        }
+        //线的首尾节点为导线上的节点
+        if graph.dots.iter().find(|d| d.pos == wire.start).is_none() {
+            graph.add_dot(Dot {
+                pos: wire.start.clone(),
+                distance: 0,
+                type_: NodeType::Output,
+            });
+        }
+        if graph.dots.iter().find(|d| d.pos == wire.end).is_some() {
+            graph.add_dot(Dot {
+                pos: wire.end.clone(),
+                distance: 0,
+                type_: NodeType::Output,
+            });
+        }
+    }
+    Some(graph)
+}
