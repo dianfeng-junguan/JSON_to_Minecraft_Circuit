@@ -2,7 +2,7 @@ use crate::*;
 
 // 定义数据结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Dot {
+pub struct Dot {
     pos: Position,
     distance: i32,   // 自起点的距离
     type_: NodeType, // 输入输出等
@@ -70,12 +70,41 @@ enum RepeaterDirection {
     Backward,
 }
 ///全局方向
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum GlobalDirection {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+pub enum GlobalDirection {
     South,
     North,
     West,
     East,
+    Up,
+    Down,
+}
+impl GlobalDirection {
+    pub fn direct(from: Position, to: Position) -> GlobalDirection {
+        if from.x > to.x {
+            return Self::West;
+        } else if from.x < to.x {
+            return Self::East;
+        } else if from.y > to.y {
+            return Self::Down;
+        } else if from.y < to.y {
+            return Self::Up;
+        } else if from.z > to.z {
+            return Self::South;
+        } else {
+            return Self::North;
+        }
+    }
+    pub fn opposite(self) -> GlobalDirection {
+        match self {
+            Self::South => Self::North,
+            Self::North => Self::South,
+            Self::West => Self::East,
+            Self::East => Self::West,
+            Self::Up => Self::Down,
+            Self::Down => Self::Up,
+        }
+    }
 }
 impl From<&str> for GlobalDirection {
     fn from(value: &str) -> Self {
@@ -93,7 +122,7 @@ pub struct Graph {
     dots: Vec<Dot>,
     edges: Vec<Edge>,
     outputs: Vec<Dot>,
-    inputs: Vec<Dot>,
+    pub(crate) inputs: Vec<Dot>,
 }
 
 pub fn check_circuit(obj: &Circuit, model_objects: &Vec<Box<dyn ModelObject>>) -> bool {

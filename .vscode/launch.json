@@ -7,10 +7,11 @@
             "program": "${workspaceFolder}/target/debug/mc_circuit_script.exe",
             "args": [
                 "-i",
-                "testch.json",
+                "lib/and.json",
                 "-o",
-                "testch.lithematic",
-                "-c",
+                "and_sim.json",
+                "-s",
+                "sim.json",
                 "-l",
                 "lib"
             ],

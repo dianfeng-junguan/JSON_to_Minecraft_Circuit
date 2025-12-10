@@ -1,9 +1,10 @@
-# Minecraft Circuit JSON 语法说明
+# Minecraft Redstone JSON-to-lithematic converter
 
-通过编译器，将项目json转换为schematic文件。
+A small project which converts a json Minecraft redstone project to lithematic or nbt.
 
+The project json is used by repository [MinecraftRedstoneEditor](https://github.com/dianfeng-junguan/MinecraftRedstoneEditor.git)
 
-范例项目文件
+template project json
 ```json
 
 {
@@ -69,23 +70,23 @@
 }
 
 ```
-## 项目文件结构
+## Structure of a project json
 
 ### imports
 
 #### modelName
 
-元件名称，如上面的and，将会被后面使用
+name of the model of the component.
 
 #### type
 
-元件类型，有以下几种：
-- component：普通的组件，可以被放置在世界中，是直接对应一个nbt文件的
-- circuit: 电路，对应一个项目json，依赖于其他的circuit和component
+type of the component model.
+- component：Regular component corresponding to an NBT file.
+- circuit: Subcircuit described by a json which depends on other components.
 
 #### path
 
-元件的路径，可以是相对路径，也可以是绝对路径，如果是相对路径，则以项目json为根目录。
+path of the NBT file of the model. If relative, it will search for the nbt in the lib/.
 
 ### circuit
 
@@ -95,24 +96,23 @@
 
 ##### baseMaterial
 
-电线基底方块，填写方块id，如"stone"。
+block name such as "stone"。
 
 #### blocks
 
-一些需要单独放置的方块。
+Some blocks you might want to place apart from components.
 
 ### inputs
 
-输入端口，可以有多个。
+
 
 ### outputs
 
-输出端口，可以有多个。
 
-上面inputs和outputs标签在项目被其他电路引用的时候是必须的，作为单独项目文件的时候是可选的。
+the "input" and "output" are necessary when the circuit project is referred to as subcircuit, optional when it's just a project.
 
-## 元件json格式
-元件json，如上面的and.json，格式如下
+## Format of component JSON
+For example, and.json
 ```json
 {
     "name":"and",
@@ -129,17 +129,17 @@
     ]
 }
 ```
-注：这里的nbt可以是nbt, litematic和schematic文件。
+the "nbt" here can be nbt, lithematic or schematic.
 
-## 编译
+## Compile
 
 ```bash
 cargo build
 ```
 
-## 使用方法
+## Usage
 
-请见
+see it by running
 ```bash
 ./mc_circuit_script -h
 ```

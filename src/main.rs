@@ -1,12 +1,16 @@
 mod check;
+mod sim;
+mod wiring;
 use ansi_term::Color::{*};
 use clap::Parser;
 use flate2::Compression;
-use std::{any::Any, fmt::Display, fs::OpenOptions, io::{Read, Write}, ops::Add};
+use std::{any::Any, fmt::Display, fs::{File, OpenOptions}, io::{BufReader, Read, Write}, ops::Add};
 use serde_derive::{Deserialize, Serialize};
 use mc_schem::{region::WorldSlice, schem::{LitematicaSaveOption, Schematic}, Block, Region};
 use std::collections::{HashMap, HashSet};
 use check::*;
+
+use crate::sim::simulate_component;
 #[derive(Debug, Clone, Serialize, Deserialize,PartialEq, Eq,Hash,Copy)]
 struct Position{
     x: i32,
@@ -16,6 +20,9 @@ struct Position{
 impl Position {
     pub fn to_slice(&self) -> [i32;3] {
         [self.x,self.y,self.z]
+    }
+    pub fn neighbors(&self) -> Vec<Position> {
+        vec![*self+Position{x:1,y:0,z:0},*self+Position{x:-1,y:0,z:0},*self+Position{x:0,y:1,z:0},*self+Position{x:0,y:-1,z:0},*self+Position{x:0,y:0,z:1},*self+Position{x:0,y:0,z:-1}]
     }
 }
 impl Add for Position {
@@ -85,7 +92,7 @@ struct BlockInfo{
     id:String,
     properties:Option<Properties>
 }
-#[derive(Serialize, Deserialize,Clone)]
+#[derive(Serialize, Deserialize,Clone,PartialEq,Eq,Hash)]
 struct Port{
     name: String,
     position: Position,
@@ -195,7 +202,9 @@ struct CommandLineArgs{
     #[clap(short,long)]
     library:Option<String>,//导入的组件库
     #[clap(long)]
-    graph_json:bool//生成连接图的json文件
+    graph_json:bool,//生成连接图的json文件
+    #[clap(short, long)]
+    simulate_input_path:Option<String>//模拟电路运行输入文件路径
 }
 fn main() {
     let args=CommandLineArgs::parse();
@@ -209,6 +218,22 @@ fn main() {
         error_begin();
         unimplemented!("Decompiling not implemented yet");
     }
+    
+    //仿真
+    if let Some(simulate_input_path)=args.simulate_input_path {
+        let input_component_model:ComponentModelObject=serde_json::from_reader(BufReader::new(File::open(input_json).expect("failed to open input json file"))).unwrap();
+        let input_maps:HashMap<String,i32>=serde_json::from_reader(BufReader::new(File::open(simulate_input_path).expect("failed to open simulate input file"))).unwrap();
+        let output_maps=simulate_component(&input_component_model, &input_maps,args.library.as_ref().unwrap());
+        let output_json=serde_json::to_string(&output_maps).unwrap();
+        let mut output_file=OpenOptions::new().write(true).create(true).truncate(true).open(output_path.clone()).unwrap_or_else(|e| {
+            error_begin();
+            panic!("failed to open output json file {}",output_path.clone());
+        });
+        output_file.write(output_json.as_bytes()).expect("failed to write output json file");
+        println!("generated output json file {}",output_path);
+        return;
+    }
+    //否则输入文件视为circuit文件
     //编译成schematic
     let mut jsonfile=OpenOptions::new()
     .read(true)
@@ -271,6 +296,7 @@ fn main() {
         graphjson.write(graphstr.as_bytes()).expect("failed to write graph json file");
         println!("generated graph json file {}_graph.json",output_path);
     }
+    
     //下面开始编译
     //创建一个region
     let global_region=Region::with_shape(obj.size.to_slice());
