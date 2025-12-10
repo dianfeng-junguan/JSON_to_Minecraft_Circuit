@@ -77,8 +77,7 @@ struct Properties{
 impl Display for Properties {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f,"{{\n facing:{},\n delay:{},\n locked:{},\n powered:{},\n power:{}}}",
-            self.facing,self.delay,self.locked,self.powered,self.power);
-            Ok(())
+            self.facing,self.delay,self.locked,self.powered,self.power)
     }
 }
 impl Default for Properties {
