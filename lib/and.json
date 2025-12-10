@@ -1,0 +1,13 @@
+{
+    "nbt":"nbt/and.nbt",
+    "name":"and",
+    "modelType":"component",
+    "size":[3,4,4],
+    "inputs":[
+        {"name":"input0","position":[0,2,4]},
+        {"name":"input1","position":[2,2,4]}
+    ],
+    "outputs":[
+        {"name":"output","position":[3,1,0]}
+    ]
+}
