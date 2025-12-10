@@ -77,8 +77,7 @@ struct Properties{
 impl Display for Properties {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f,"{{\n facing:{},\n delay:{},\n locked:{},\n powered:{},\n power:{}}}",
-            self.facing,self.delay,self.locked,self.powered,self.power);
-            Ok(())
+            self.facing,self.delay,self.locked,self.powered,self.power)
     }
 }
 impl Default for Properties {
@@ -98,6 +97,8 @@ struct Port{
     position: Position,
 }
 #[derive(Serialize, Deserialize)]
+///## Circuit
+/// 项目文件的存储对象。
 struct Circuit{
     name: String,
     size: Position,
@@ -108,6 +109,8 @@ struct Circuit{
     inputs:Vec<Port>,
     outputs:Vec<Port>
 }
+///## ModelObject
+/// 项目文件中存储的元件和导线所具有的共性接口
 trait ModelObject:Any {
     fn get_name(&self) -> &str;
     fn get_type(&self) -> &str;
