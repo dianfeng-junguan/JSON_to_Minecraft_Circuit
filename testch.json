@@ -1,0 +1,87 @@
+{
+    "name": "test_circuit",
+    "size": {"x": 30, "y": 10, "z": 20},
+    "imports": [
+        {
+            "modelName": "and",
+            "modelType": "component",
+            "path": "and.json"
+        }
+    ],
+    "components": [
+        {
+            "name": "and001",
+            "model": "and",
+            "position": {"x": 0, "y": 1, "z": 2}
+        },
+        {
+            "name": "and002",
+            "model": "and",
+            "position": {"x": 21, "y": 1, "z": 2}
+        }
+    ],
+    "wires": [
+        {
+            "name": "wire001",
+            "start": {"x": 1, "y": 1, "z": 2},
+            "end": {"x": 2, "y": 1, "z": 2},
+            "baseMaterial": "stone"
+        },
+        {
+            "name": "wire002",
+            "start": {"x": 3, "y": 1, "z": 2},
+            "end": {"x": 4, "y": 1, "z": 2},
+            "baseMaterial": "stone"
+        },
+        {
+            "name": "wire003",
+            "start": {"x": 5, "y": 1, "z": 2},
+            "end": {"x": 21, "y": 1, "z": 2},
+            "baseMaterial": "stone"
+        },
+        {
+            "name": "wire004",
+            "start": {"x": 16, "y": 1, "z": 2},
+            "end": {"x": 17, "y": 1, "z": 2},
+            "baseMaterial": "stone"
+        },
+        {
+            "name": "wire005",
+            "start": {"x": 18, "y": 1, "z": 2},
+            "end": {"x": 19, "y": 1, "z": 2},
+            "baseMaterial": "stone"
+        }
+    ],
+    "blocks": [
+        {
+            "position": {"x": 2, "y": 1, "z": 2},
+            "id": "minecraft:repeater",
+            "properties":{
+                "facing": "south",
+                "delay": 1,
+                "powered": false,
+                "locked": false,
+                "power":0
+            }
+        },
+        {
+            "position": {"x": 4, "y": 1, "z": 2},
+            "id": "minecraft:repeater",
+            "properties":{
+                "facing": "south",
+                "delay": 1,
+                "powered": false,
+                "locked": false,
+                "power":0
+            }
+        }
+    ],
+    "inputs": [
+        {"name": "input001", "position": {"x": 0, "y": 0, "z": 0}},
+        {"name": "input002", "position": {"x": 3, "y": 0, "z": 0}}
+    ],
+    "outputs": [
+        {"name": "output001", "position": {"x": 19, "y": 0, "z": 0}},
+        {"name": "output002", "position": {"x": 14, "y": 0, "z": 0}}
+    ]
+}

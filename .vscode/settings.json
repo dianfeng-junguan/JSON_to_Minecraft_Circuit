@@ -1,0 +1,14 @@
+{
+    "[rust]": {
+        "editor.defaultFormatter": "rust-lang.rust-analyzer",
+        "editor.formatOnSave": true
+    },
+    "rust-analyzer.runnables.extraArgs": [
+        "--",
+        "-i",
+        "testch.json",
+        "-o"
+    ],
+    "journal.base": "D:/Code/Rust/MCCircuitScript/mc_circuit_script/log",
+    "vscode-journal-view.expanded": true
+}

@@ -1,10 +1,17 @@
+mod check;
+mod sim;
+mod wiring;
 use ansi_term::Color::{*};
 use clap::Parser;
 use flate2::Compression;
-use std::{any::Any, fs::OpenOptions, io::{Read, Write}, ops::Deref};
+use std::{any::Any, fmt::Display, fs::{File, OpenOptions}, io::{BufReader, Read, Write}, ops::Add};
 use serde_derive::{Deserialize, Serialize};
-use mc_schem::{block::CommonBlock, region::WorldSlice, schem::{LitematicaSaveOption, Schematic}, Block, Region, VanillaStructureLoadOption};
-#[derive(Debug, Clone, Serialize, Deserialize)]
+use mc_schem::{region::WorldSlice, schem::{LitematicaSaveOption, Schematic}, Block, Region};
+use std::collections::{HashMap, HashSet};
+use check::*;
+
+use crate::sim::simulate_component;
+#[derive(Debug, Clone, Serialize, Deserialize,PartialEq, Eq,Hash,Copy)]
 struct Position{
     x: i32,
     y: i32,
@@ -14,6 +21,26 @@ impl Position {
     pub fn to_slice(&self) -> [i32;3] {
         [self.x,self.y,self.z]
     }
+    pub fn neighbors(&self) -> Vec<Position> {
+        vec![*self+Position{x:1,y:0,z:0},*self+Position{x:-1,y:0,z:0},*self+Position{x:0,y:1,z:0},*self+Position{x:0,y:-1,z:0},*self+Position{x:0,y:0,z:1},*self+Position{x:0,y:0,z:-1}]
+    }
+}
+impl Add for Position {
+    type Output=Position;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Position
+        {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+            z: self.z + rhs.z
+        }
+    }
+}
+impl Display for Position {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f,"({},{},{})",self.x,self.y,self.z)
+    }
 }
 #[allow(non_snake_case)]
 #[derive(Serialize, Deserialize)]
@@ -22,7 +49,7 @@ struct ImportItem{
     modelType: String,
     path: String,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize,Clone)]
 ///## Component
 /// 元件对象，存储在Circuit中
 /// 
@@ -39,10 +66,36 @@ struct Wire{
     end: Position,
     baseMaterial: String,
 }
+#[derive(Serialize, Deserialize,Clone)]
+struct Properties{
+    facing: String,
+    delay: i32,
+    locked: bool,
+    powered: bool,
+    power: i32
+}
+impl Display for Properties {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f,"{{\n facing:{},\n delay:{},\n locked:{},\n powered:{},\n power:{}}}",
+            self.facing,self.delay,self.locked,self.powered,self.power);
+            Ok(())
+    }
+}
+impl Default for Properties {
+    fn default() -> Self {
+        Self { facing: Default::default(), delay: Default::default(), locked: Default::default(), powered: Default::default(), power: Default::default() }
+    }
+}
 #[derive(Serialize, Deserialize)]
 struct BlockInfo{
     position: Position,
-    id:String
+    id:String,
+    properties:Option<Properties>
+}
+#[derive(Serialize, Deserialize,Clone,PartialEq,Eq,Hash)]
+struct Port{
+    name: String,
+    position: Position,
 }
 #[derive(Serialize, Deserialize)]
 struct Circuit{
@@ -52,15 +105,16 @@ struct Circuit{
     components: Vec<Component>,
     wires: Vec<Wire>,
     blocks:Vec<BlockInfo>,
-    inputs:Vec<Position>,
-    outputs:Vec<Position>
+    inputs:Vec<Port>,
+    outputs:Vec<Port>
 }
-trait ModelObject {
+trait ModelObject:Any {
     fn get_name(&self) -> &str;
     fn get_type(&self) -> &str;
-    fn get_inputs(&self) -> &Vec<Position>;
-    fn get_outputs(&self) -> &Vec<Position>;
+    fn get_inputs(&self) -> &Vec<Port>;
+    fn get_outputs(&self) -> &Vec<Port>;
     fn get_nbt_path(&self) -> Option<&str>;
+    fn as_any(&self) -> &dyn Any;
 }
 #[derive(Serialize, Deserialize)]
 ///## ComponentModelObject
@@ -72,19 +126,19 @@ struct ComponentModelObject {
     modelType: String,
     nbt:String,
     size: [i32;3],
-    inputs: Vec<Position>,
-    outputs: Vec<Position>,
+    inputs: Vec<Port>,
+    outputs: Vec<Port>,
 }
 impl ModelObject for ComponentModelObject {
     fn get_name(&self) -> &str {
         &self.name
     }
 
-    fn get_inputs(&self) -> &Vec<Position> {
+    fn get_inputs(&self) -> &Vec<Port> {
         &self.inputs
     }
 
-    fn get_outputs(&self) -> &Vec<Position> {
+    fn get_outputs(&self) -> &Vec<Port> {
         &self.outputs
     }
     
@@ -95,17 +149,21 @@ impl ModelObject for ComponentModelObject {
     fn get_nbt_path(&self) -> std::option::Option<&str> {
         Some(self.nbt.as_str())
     }
+    
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 impl ModelObject for Circuit {
     fn get_name(&self) -> &str {
         &self.name
     }
 
-    fn get_inputs(&self) -> &Vec<Position> {
+    fn get_inputs(&self) -> &Vec<Port> {
         &self.inputs
     }
 
-    fn get_outputs(&self) -> &Vec<Position> {
+    fn get_outputs(&self) -> &Vec<Port> {
         &self.outputs
     }
     
@@ -115,6 +173,10 @@ impl ModelObject for Circuit {
     
     fn get_nbt_path(&self) -> Option<&str> {
         None
+    }
+    
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 ///## ModelObjectItem
@@ -135,6 +197,14 @@ struct CommandLineArgs{
     decomp_path: Option<String>,
     #[clap(short, long)]
     generate_component_json: bool,
+    #[clap(short, long)]
+    check_circuit:bool,//检查电路的连接，红石可达性等
+    #[clap(short,long)]
+    library:Option<String>,//导入的组件库
+    #[clap(long)]
+    graph_json:bool,//生成连接图的json文件
+    #[clap(short, long)]
+    simulate_input_path:Option<String>//模拟电路运行输入文件路径
 }
 fn main() {
     let args=CommandLineArgs::parse();
@@ -144,46 +214,26 @@ fn main() {
     let decomp_flag=false;
     //生成schematic的时候是否附带生成把它视为component的json文件
     let genereate_component_flag=args.generate_component_json;
-    /* for arg in args {
-        println!("arg: {}",arg);
-        match arg.as_str() {
-            "-v"=>println!("MC Circuit Script \nVersion 1.0.0"),
-            "-h"=> {
-                println!("Usage: mc_circuit_script [options] [input json] [output schematic name]");
-                println!("Options:");
-                println!("-v: Show version information");
-                println!("-h: Show help information");
-                println!("-d: Decompile schematic to json");
-                println!("-g: Generate component json file for output schematic");
-                println!("Example:");
-                println!("mc_circuit_script input.json output.schematic");
-                println!("mc_circuit_script -d input.schematic output.json");
-            },
-            "-d"=>{
-                decomp_flag=true;
-            },
-            "-g"=>{
-                genereate_component_flag=true;
-            }
-            _=>{
-                if decomp_flag {
-                    //反编译schematic为json
-                    decomp_flag=false;
-                    decomp_path.clone_from(&arg);
-                }
-                if input_json.len() == 0 {
-                    input_json.clone_from(&arg);
-                    println!("{}",input_json)
-                }else if output_path.len() == 0 {
-                    output_path.clone_from(&arg);
-                }
-            }
-        }
-    } */
     if decomp_flag {
         error_begin();
         unimplemented!("Decompiling not implemented yet");
     }
+    
+    //仿真
+    if let Some(simulate_input_path)=args.simulate_input_path {
+        let input_component_model:ComponentModelObject=serde_json::from_reader(BufReader::new(File::open(input_json).expect("failed to open input json file"))).unwrap();
+        let input_maps:HashMap<String,i32>=serde_json::from_reader(BufReader::new(File::open(simulate_input_path).expect("failed to open simulate input file"))).unwrap();
+        let output_maps=simulate_component(&input_component_model, &input_maps,args.library.as_ref().unwrap());
+        let output_json=serde_json::to_string(&output_maps).unwrap();
+        let mut output_file=OpenOptions::new().write(true).create(true).truncate(true).open(output_path.clone()).unwrap_or_else(|e| {
+            error_begin();
+            panic!("failed to open output json file {}",output_path.clone());
+        });
+        output_file.write(output_json.as_bytes()).expect("failed to write output json file");
+        println!("generated output json file {}",output_path);
+        return;
+    }
+    //否则输入文件视为circuit文件
     //编译成schematic
     let mut jsonfile=OpenOptions::new()
     .read(true)
@@ -195,15 +245,22 @@ fn main() {
         error_begin();
         panic!("failed to parse input json file {}:\n{}",&input_json,x.to_string());
     });
+
     //存放读取的元件和子电路json对象，缓存
     let mut model_objects:Vec<Box<dyn ModelObject>>=vec![];
     let mut schem:Schematic=Schematic::new();
     //解析导入，存入缓存方便后面取用
-    for import_item in obj.imports {
-        let path=import_item.path.as_str();
+    for import_item in obj.imports.iter() {
+        let path={
+            if let Some(library_path)=args.library.clone() {
+                library_path+"/"+import_item.path.as_str()
+            }else {
+                import_item.path.clone()
+            }
+        };
         let model_type=import_item.modelType.as_str();
         let rd=OpenOptions::new().read(true)
-        .open(path).expect(format!("failed to open import file {}",path).as_str());
+        .open(&path).expect(format!("failed to open import file {}",&path).as_str());
         match model_type {
             "component"=>{
                 //元件类型
@@ -220,6 +277,27 @@ fn main() {
             }
         }
     }
+
+    
+    //检查电路
+    if args.check_circuit && !check_circuit(&obj, &model_objects){
+        error_begin();
+        println!("Error: circuit check failed. Stop compiling.");
+        return;
+    }else if args.check_circuit {
+        println!("check done. No problem found.")
+    }
+    if args.graph_json {
+        let graphstr=serde_json::to_string(&create_graph(&obj, &model_objects)).unwrap();
+        let mut graphjson=OpenOptions::new().write(true).create(true).truncate(true).open(output_path.clone()+"_graph.json").unwrap_or_else(|e| {
+            error_begin();
+            panic!("failed to open graph json file {}",output_path.clone()+"_graph.json");
+        });
+        graphjson.write(graphstr.as_bytes()).expect("failed to write graph json file");
+        println!("generated graph json file {}_graph.json",output_path);
+    }
+    
+    //下面开始编译
     //创建一个region
     let global_region=Region::with_shape(obj.size.to_slice());
     schem.regions.push(global_region);
@@ -243,8 +321,15 @@ fn main() {
         match model_import_item.get_type() {
             "component"=>{
                 // 元件，寻找它的nbt
-                let nbt_path=model_import_item.get_nbt_path().unwrap();
-                let (mut nbt_obj,raw_meta)=Schematic::from_file(nbt_path).unwrap_or_else(|x|{panic!("failed to load nbt file {}",nbt_path)});
+                let nbt_path={
+                    let relative=model_import_item.get_nbt_path().unwrap();
+                    if let Some(library_path) = args.library.as_ref()  {
+                        library_path.to_owned()+"/"+relative
+                    }else {
+                        relative.to_string()
+                    }
+                };
+                let (mut nbt_obj,raw_meta)=Schematic::from_file(&nbt_path).unwrap_or_else(|x|{panic!("failed to load nbt file {}",nbt_path)});
                 //nbt合并到一个region防止多个region
                 nbt_obj.merge_regions(&Block::air());
                 //放置到schem的region
@@ -315,13 +400,13 @@ fn main() {
             modelType: "component".to_string(),
             nbt: output_path.to_string(),
             size: obj.size.to_slice(),
-            inputs: obj.inputs.clone(),
-            outputs: obj.outputs.clone(),
+            inputs: obj.inputs.clone().iter_mut().enumerate().map(|(i,p)| {p.name=format!("input{}",i);p.clone()}).collect(),
+            outputs: obj.outputs.clone().iter_mut().enumerate().map(|(i,p)| {p.name=format!("output{}",i);p.clone()}).collect(),
         };
         let mut component_json=serde_json::to_string(&component_json).unwrap();
         let mut component_file=OpenOptions::new()
         .write(true)
-        .create(true)
+        .create(true).truncate(true)
         .open(format!("{}.json",output_path)).unwrap();
         component_file.write_all(component_json.as_bytes()).unwrap();
         println!("Component json file saved to {}.json",output_path);
@@ -329,6 +414,7 @@ fn main() {
     schem.save_litematica_file(&output_path, &save_option).expect("error: failed to save schematic file");
     println!("Schematic saved to {}",output_path);
 }
+
 
 fn fill_block(start:[i32;3],end:[i32;3],block:Block,region:&mut Region){
     for x in start[0]..=end[0] {
@@ -340,5 +426,5 @@ fn fill_block(start:[i32;3],end:[i32;3],block:Block,region:&mut Region){
     }
 }
 fn error_begin(){
-    print!("{}",Red.paint("error:"));
+    print!("{}",Red.paint("error: "));
 }
