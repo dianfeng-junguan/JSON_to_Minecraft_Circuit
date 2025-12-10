@@ -2,4 +2,10 @@
 
 ./*.json
 
-lib
+.vscode/
+
+test*
+
+*sim*
+
+log/
