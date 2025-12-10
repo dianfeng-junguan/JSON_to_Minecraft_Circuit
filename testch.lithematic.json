@@ -1,1 +1,0 @@
-{"name":"test_circuit","modelType":"component","nbt":"testch.lithematic","size":[30,10,20],"inputs":[{"name":"input0","position":{"x":0,"y":0,"z":0}},{"name":"input1","position":{"x":3,"y":0,"z":0}}],"outputs":[{"name":"output0","position":{"x":19,"y":0,"z":0}},{"name":"output1","position":{"x":14,"y":0,"z":0}}]}
