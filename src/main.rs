@@ -10,7 +10,7 @@ use mc_schem::{region::WorldSlice, schem::{LitematicaSaveOption, Schematic}, Blo
 use std::collections::{HashMap, HashSet};
 use check::*;
 
-use crate::sim::simulate_component;
+use crate::sim::{do_simulation, simulate_component};
 #[derive(Debug, Clone, Serialize, Deserialize,PartialEq, Eq,Hash,Copy)]
 struct Position{
     x: i32,
@@ -23,6 +23,9 @@ impl Position {
     }
     pub fn neighbors(&self) -> Vec<Position> {
         vec![*self+Position{x:1,y:0,z:0},*self+Position{x:-1,y:0,z:0},*self+Position{x:0,y:1,z:0},*self+Position{x:0,y:-1,z:0},*self+Position{x:0,y:0,z:1},*self+Position{x:0,y:0,z:-1}]
+    }
+    pub fn distance(&self,pos2: Position) -> u64 {
+        ((self.x - pos2.x).abs() + (self.y - pos2.y).abs() + (self.z - pos2.z).abs()) as u64
     }
 }
 impl Add for Position {
@@ -91,7 +94,7 @@ struct BlockInfo{
     id:String,
     properties:Option<Properties>
 }
-#[derive(Serialize, Deserialize,Clone,PartialEq,Eq,Hash)]
+#[derive(Serialize, Deserialize,Clone,PartialEq,Eq,Hash,Debug)]
 struct Port{
     name: String,
     position: Position,
@@ -222,20 +225,6 @@ fn main() {
         unimplemented!("Decompiling not implemented yet");
     }
     
-    //仿真
-    if let Some(simulate_input_path)=args.simulate_input_path {
-        let input_component_model:ComponentModelObject=serde_json::from_reader(BufReader::new(File::open(input_json).expect("failed to open input json file"))).unwrap();
-        let input_maps:HashMap<String,i32>=serde_json::from_reader(BufReader::new(File::open(simulate_input_path).expect("failed to open simulate input file"))).unwrap();
-        let output_maps=simulate_component(&input_component_model, &input_maps,args.library.as_ref().unwrap());
-        let output_json=serde_json::to_string(&output_maps).unwrap();
-        let mut output_file=OpenOptions::new().write(true).create(true).truncate(true).open(output_path.clone()).unwrap_or_else(|e| {
-            error_begin();
-            panic!("failed to open output json file {}",output_path.clone());
-        });
-        output_file.write(output_json.as_bytes()).expect("failed to write output json file");
-        println!("generated output json file {}",output_path);
-        return;
-    }
     //否则输入文件视为circuit文件
     //编译成schematic
     let mut jsonfile=OpenOptions::new()
@@ -248,7 +237,21 @@ fn main() {
         error_begin();
         panic!("failed to parse input json file {}:\n{}",&input_json,x.to_string());
     });
-
+    //TODO 仿真需要输入两个文件: 电路json和输入json
+    //仿真
+    if let Some(simulate_input_path)=args.simulate_input_path {
+        let input_component_model:ComponentModelObject=serde_json::from_reader(BufReader::new(File::open(input_json).expect("failed to open input json file"))).unwrap();
+        let mut inputs=String::new();
+        OpenOptions::new().read(true).open(simulate_input_path).expect("failed to open simulate input file").read_to_string(&mut inputs).expect("failed to read simulate input file");
+        let output_json=do_simulation(&obj, inputs);
+        let mut output_file=OpenOptions::new().write(true).create(true).truncate(true).open(output_path.clone()).unwrap_or_else(|e| {
+            error_begin();
+            panic!("failed to open output json file {}",output_path.clone());
+        });
+        output_file.write(output_json.as_bytes()).expect("failed to write output json file");
+        println!("generated output json file {}",output_path);
+        return;
+    }
     //存放读取的元件和子电路json对象，缓存
     let mut model_objects:Vec<Box<dyn ModelObject>>=vec![];
     let mut schem:Schematic=Schematic::new();
