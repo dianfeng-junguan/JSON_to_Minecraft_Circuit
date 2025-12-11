@@ -24,6 +24,9 @@ impl Position {
     pub fn neighbors(&self) -> Vec<Position> {
         vec![*self+Position{x:1,y:0,z:0},*self+Position{x:-1,y:0,z:0},*self+Position{x:0,y:1,z:0},*self+Position{x:0,y:-1,z:0},*self+Position{x:0,y:0,z:1},*self+Position{x:0,y:0,z:-1}]
     }
+    pub fn distance(&self,pos2: Position) -> u64 {
+        ((self.x - pos2.x).abs() + (self.y - pos2.y).abs() + (self.z - pos2.z).abs()) as u64
+    }
 }
 impl Add for Position {
     type Output=Position;
