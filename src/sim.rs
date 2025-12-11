@@ -560,7 +560,7 @@ struct SimulationPowerAssign {
 }
 
 fn simulate(simulation: &mut Simulation, inputs: SimulationPowerAssign) -> SimulationPowerAssign {
-    //TODO 根据连接图和输入，进行仿真
+    //根据连接图和输入，进行仿真
     /*
     思路：
     根据输入信号，先给部分powerpoint赋值，然后根据连接图进行传播计算，直到所有的powerpoint都被计算过。
@@ -618,32 +618,19 @@ fn simulate(simulation: &mut Simulation, inputs: SimulationPowerAssign) -> Simul
                 })
                 .collect();
             let len_before_mapwhile = connected_pps.len();
-            //输入
-            let input_pp = connected_pps
-                .iter()
-                .map_while(|pp| {
+            //输入输出
+            let (input_pp, mut output_pp) = {
+                let mut inp = Vec::<&PowerPoint>::new();
+                let mut outp = Vec::<&mut PowerPoint>::new();
+                connected_pps.iter_mut().for_each(|pp| {
                     if pp.powerpoint_type == PowerPointType::INPUT {
-                        Some(pp)
+                        inp.push(pp);
                     } else {
-                        None
+                        outp.push(pp);
                     }
-                })
-                .collect::<Vec<&&mut PowerPoint>>();
-            //输出
-            let mut output_pp = connected_pps
-                .iter_mut()
-                .map_while(|pp| {
-                    if pp.powerpoint_type == PowerPointType::OUTPUT {
-                        Some(pp)
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<&mut &mut PowerPoint>>();
-            assert!(
-                len_before_mapwhile == connected_pps.len(),
-                "PowerPoint mapping error: map_while changes length"
-            );
+                });
+                (inp, outp)
+            };
             //根据func进行计算
             match unit.func {
                 SimFuncs::COPY => {
