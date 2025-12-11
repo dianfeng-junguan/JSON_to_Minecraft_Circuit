@@ -8,7 +8,7 @@ use std::{
 };
 
 use mc_schem::{Block, Schematic, block};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
@@ -553,7 +553,7 @@ fn generate_simulation_info(project: &Circuit) -> Simulation {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 ///仿真输入/输出
 struct SimulationPowerAssign {
     assignments: serde_json::Map<String, Value>,
@@ -734,11 +734,16 @@ fn simulate(simulation: &mut Simulation, inputs: SimulationPowerAssign) -> Simul
     output
 }
 
-pub fn simulate_circuit(circuit: &Circuit, inputs: SimulationPowerAssign) -> SimulationPowerAssign {
+fn simulate_circuit(circuit: &Circuit, inputs: SimulationPowerAssign) -> SimulationPowerAssign {
     let mut simulation = generate_simulation_info(circuit);
     simulate(&mut simulation, inputs)
 }
-
+pub fn do_simulation(circuit: &Circuit, inputs: &str) -> String {
+    let assignments =
+        serde_json::from_str(inputs).expect("failed reading input json: format incorrect");
+    let out = simulate_circuit(circuit, assignments);
+    serde_json::to_string(&out).expect("fatal: SimulationPowerAssign failed to_string")
+}
 ///计算导线的有效长度，考虑中继器
 fn calc_wire_effective_length(wire: &Wire, project: &Circuit) -> u64 {
     //TODO 计算导线的有效长度
