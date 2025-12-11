@@ -1,10 +1,20 @@
-use std::{cmp::max, collections::HashMap, iter::Map, ops::Index};
+use std::{
+    cmp::max,
+    collections::HashMap,
+    fs::OpenOptions,
+    io::BufReader,
+    iter::Map,
+    ops::{Add, Index},
+};
 
-use mc_schem::{block, Block, Schematic};
+use mc_schem::{Block, Schematic, block};
+use serde::Deserialize;
+use serde_json::Value;
 
 use crate::{
+    Circuit, ComponentModelObject, ModelObject, Port, Position,
     check::{GlobalDirection, Graph},
-    ModelObject, Port, Position,
+    error_begin,
 };
 
 ///记录一个方块是否从某个方向计算过红石能量
@@ -229,4 +239,276 @@ fn simulate_graph(graph: Graph) {
             break;
         }
     }
+}
+/*
+对于SimPoint用法的说明：
+SimPoint是对元件和导线的仿真包装，也就是一个元件/导线一个SimPoint。
+元件和导线对红石信号的影响被包装为SimFuncs，仿真时通过应用SimFuncs来计算信号。
+Connections则表示SimPoint之间的连接关系。
+*/
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum SimFuncs {
+    COPY,
+    ///导线行为，将红石信号衰减个值之后输出
+    WIRE,
+    AND,
+    OR,
+    NOT,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///仿真节点，导线的两端，元件的端口均使用此结构。
+struct SimPoint {
+    name: String,
+    position: Position,
+    //信号通过该节点时所做的运算
+    func: SimFuncs,
+}
+impl SimPoint {
+    pub fn new(name: &str, position: Position, func: SimFuncs) -> Self {
+        Self {
+            name: name.to_string(),
+            position,
+            func,
+        }
+    }
+    /// 仅作信号传递的节点
+    pub fn copy(name: &str, position: Position) -> Self {
+        Self {
+            name: name.to_string(),
+            position,
+            func: SimFuncs::COPY,
+        }
+    }
+    pub fn get_func_from_model(model: &ComponentModelObject) -> SimFuncs {
+        //暂时先写成硬编码，之后要改成可拓展形式
+        match model.name.as_str() {
+            "and" => SimFuncs::AND,
+            "or" => SimFuncs::OR,
+            "not" => SimFuncs::NOT,
+            _ => SimFuncs::COPY,
+        }
+    }
+}
+/*
+解释PointType的用法：
+寻找连接时，对于导线的两端和元件的端口，标记为ENDING类型的点，
+对于导线两端之外的线上其他部分上的点，标记为PART_OF_WIRE类型的点。
+
+连接：两点处于同一位置。
+
+对于ENDING类型的点，两种类型的点都能连接。
+对于PART_OF_WIRE类型的点，只能和ENDING类型的点连接，不能和其他PART_OF_WIRE类型的点连接。
+这样做的目的是防止导线中间的点和其他导线中间的点连接，导致错误的连接关系产生。
+*/
+#[derive(Clone, Copy, PartialEq, Eq)]
+///标记PhysicalPoint的类型
+enum PointType {
+    ///导线的两端，元件的端口都属于这一类。
+    ENDING,
+    ///导线两端之外的其他部分上的点。
+    PART_OF_WIRE,
+}
+
+#[derive(Clone)]
+struct PhysicalPoint {
+    name: String,
+    simpoint: usize,
+    position: Position,
+    point_type: PointType,
+}
+impl PhysicalPoint {
+    pub fn new(name: &str, simpoint: usize, position: Position, point_type: PointType) -> Self {
+        Self {
+            name: name.to_string(),
+            simpoint,
+            position,
+            point_type,
+        }
+    }
+}
+#[derive(Debug, Clone)]
+struct Connection {
+    from: SimPoint,
+    to: SimPoint,
+}
+impl Connection {
+    pub fn new(from: SimPoint, to: SimPoint) -> Self {
+        Self { from, to }
+    }
+}
+///根据项目json文件，生成连接图。
+fn generate_connection_map(project: &Circuit) -> HashMap<SimPoint, Vec<SimPoint>> {
+    //TODO 先生成 Vec<Connection>
+    let mut ports = Vec::<SimPoint>::new();
+    let mut pps = Vec::<PhysicalPoint>::new();
+    let mut cons = Vec::<Connection>::new();
+    //首先，给所有的导线、元件端口都赋予一个点
+    for wire in project.wires.iter() {
+        let wiresimp = SimPoint::new(&wire.name, wire.start.clone(), SimFuncs::WIRE);
+        //TODO 导线的功能计算是需要设置导线长度的，这里还需要这样的代码
+        //从头至尾添加PhysicalPoint
+        let pos_start = if wire.start.x == wire.end.x {
+            wire.start.z
+        } else {
+            wire.start.x
+        };
+        let pos_end = if wire.end.x == wire.end.x {
+            wire.end.z
+        } else {
+            wire.end.x
+        };
+        for j in (pos_start + 1)..pos_end {
+            pps.push(PhysicalPoint::new(
+                (wiresimp.name.clone() + j.to_string().as_str()).as_str(),
+                ports.len(),
+                wire.start.clone().add(Position {
+                    x: if wire.start.x == wire.end.x {
+                        wire.start.x
+                    } else {
+                        j
+                    },
+                    y: 0,
+                    z: if wire.start.x == wire.end.x {
+                        j
+                    } else {
+                        wire.start.z
+                    },
+                }),
+                //首尾两点特殊类型
+                match j {
+                    pos_start => PointType::ENDING,
+                    pos_end => PointType::ENDING,
+                    _ => PointType::PART_OF_WIRE,
+                },
+            ));
+        }
+        ports.push(wiresimp);
+    }
+    for comp in project.components.iter() {
+        //每一个元件就是一个点
+        let model_obj = project.imports.iter().find(|&x| x.modelName == comp.model);
+        if model_obj.is_none() {
+            error_begin();
+            panic!("model {} not found for component {}", comp.model, comp.name);
+        }
+        let model_obj = model_obj.unwrap();
+
+        let realmodel: ComponentModelObject = {
+            let f = OpenOptions::new().read(true).open(&model_obj.path);
+            if f.is_err() {
+                error_begin();
+                panic!("failed to open model file {}", model_obj.path);
+            }
+            let f = f.unwrap();
+            let reader = BufReader::new(f);
+            serde_json::from_reader(reader).unwrap_or_else(|x| {
+                error_begin();
+                panic!("failed to parse model file {}: {}", model_obj.path, x);
+            })
+        };
+        //
+        let comppoint = SimPoint::new(
+            &comp.name,
+            comp.position.clone(),
+            SimPoint::get_func_from_model(&realmodel),
+        );
+        ports.push(comppoint);
+        //因为之后的判断线和元件连接是通过位置判断的，所以这里需要把元件的输入输出端口位置计算出来
+        /*
+         * 这里需要的做法是：
+         * 一套SimPoint列表，导线两头各算一个，元件自身算一个。
+         * 一套记录了位置的Point列表，每个Point记录了对应的SimPoint。
+         * 然后根据Point连接关系，生成SimPoint的连接关系。
+         */
+        for port in realmodel.inputs.iter() {
+            let pos = comp.position + port.position;
+            pps.push(PhysicalPoint::new(
+                &(comp.name.clone() + "_" + &port.name),
+                ports.len() - 1,
+                pos,
+                PointType::ENDING,
+            ));
+        }
+        //add to ports
+        for port in realmodel.outputs.iter() {
+            let pos = comp.position + port.position;
+            pps.push(PhysicalPoint::new(
+                &(comp.name.clone() + "_" + &port.name),
+                ports.len() - 1,
+                pos,
+                PointType::ENDING,
+            ));
+        }
+    }
+    //现在已经具备了记录物理地址的点pps，接下来开始根据pps建立联系。
+    /*
+    思路：
+    1. 取出一个点A
+    2. 遍历其他点，寻找位置相同的点B
+    3. 建立连接，然后把B点从列表中移除，防止重复连接
+    4. 所有B点处理完毕后，把A点从列表中移除
+    5. 重复1-4，直到列表为空
+     */
+    while pps.len() > 0 {
+        let a = pps.remove(0);
+        //寻找位置相同的点,去除
+        let _ = pps.iter().filter(|&point| {
+            if point.position == a.position//位置相同
+            //不能都是PART_OF_WIRE类型
+                && !(a.point_type == PointType::PART_OF_WIRE
+                    && point.point_type == PointType::PART_OF_WIRE)
+            {
+                //建立连接
+                cons.push(Connection::new(
+                    ports[a.simpoint].clone(),
+                    ports[point.simpoint].clone(),
+                ));
+                return true;
+            }
+            false
+        });
+    }
+    //现在连接建立完毕，开始生成连接图
+    let mut conmap: HashMap<SimPoint, Vec<SimPoint>> = HashMap::from(
+        //先生成空表
+        ports
+            .iter()
+            .map(|simp| (simp.clone(), Vec::new()))
+            .collect::<HashMap<SimPoint, Vec<SimPoint>>>(),
+    );
+    for sim in ports.iter() {
+        cons.iter().for_each(|c| {
+            if c.from.name == sim.name || c.to.name == sim.name {
+                conmap
+                    .get_mut(&sim)
+                    .expect("FATAL: conmap does not have the according SimPoint after generating")
+                    .push(if c.from.name == sim.name {
+                        c.to.clone()
+                    } else {
+                        c.from.clone()
+                    }); //把连接的另一端加入
+            }
+        });
+    }
+    //完成
+    conmap
+}
+
+#[derive(Debug, Clone, Deserialize)]
+///仿真输入/输出
+struct SimulationPowerAssign {
+    assignments: serde_json::Map<String, Value>,
+}
+
+fn simulate_map(
+    connection_map: HashMap<SimPoint, Vec<SimPoint>>,
+    inputs: SimulationPowerAssign,
+) -> SimulationPowerAssign {
+    //TODO 根据连接图和输入，进行仿真
+    unimplemented!()
+}
+
+pub fn simulate_circuit(circuit: &Circuit, inputs: SimulationPowerAssign) -> SimulationPowerAssign {
+    let connection_map = generate_connection_map(circuit);
+    simulate_map(connection_map, inputs)
 }

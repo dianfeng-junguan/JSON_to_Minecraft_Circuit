@@ -91,7 +91,7 @@ struct BlockInfo{
     id:String,
     properties:Option<Properties>
 }
-#[derive(Serialize, Deserialize,Clone,PartialEq,Eq,Hash)]
+#[derive(Serialize, Deserialize,Clone,PartialEq,Eq,Hash,Debug)]
 struct Port{
     name: String,
     position: Position,
