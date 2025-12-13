@@ -1,4 +1,6 @@
 {
-    "input0":15,
-    "input1":15
+    "assignments":{
+        "and001.input0":15,
+        "and001.input1":15
+    }
 }

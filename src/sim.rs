@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    Circuit, ComponentModelObject, ModelObject, Port, Position, Wire,
+    Circuit, CommandLineArgs, ComponentModelObject, ModelObject, Port, Position, Wire,
     check::{GlobalDirection, Graph},
-    error_begin,
+    error_begin, sim,
 };
 
 ///记录一个方块是否从某个方向计算过红石能量
@@ -276,9 +276,9 @@ impl CalculationUnit {
     pub fn set_vars(&mut self, vars: Vec<u64>) {
         self.vars = vars;
     }
-    pub fn get_func_from_model(model: &ComponentModelObject) -> SimFuncs {
+    pub fn get_func_from_model(model: &dyn ModelObject) -> SimFuncs {
         //暂时先写成硬编码，之后要改成可拓展形式
-        match model.name.as_str() {
+        match model.get_name() {
             "and" => SimFuncs::AND,
             "or" => SimFuncs::OR,
             "not" => SimFuncs::NOT,
@@ -312,24 +312,35 @@ struct PhysicalPoint {
     simpoint: usize,
     position: Position,
     point_type: PointType,
+    /// 所属的端口（能量点）。
+    /// 只有类型为ENDING的点才有对应的端口。
+    powerpoint: usize,
 }
 impl PhysicalPoint {
-    pub fn new(name: &str, simpoint: usize, position: Position, point_type: PointType) -> Self {
+    pub fn new(
+        name: &str,
+        simpoint: usize,
+        position: Position,
+        point_type: PointType,
+        powerpoint: usize,
+    ) -> Self {
         Self {
             name: name.to_string(),
             simpoint,
             position,
             point_type,
+            powerpoint,
         }
     }
 }
+type PowerPointIndex = usize;
 #[derive(Debug, Clone)]
 struct Connection {
-    from: CalculationUnit,
-    to: CalculationUnit,
+    from: PowerPointIndex,
+    to: PowerPointIndex,
 }
 impl Connection {
-    pub fn new(from: CalculationUnit, to: CalculationUnit) -> Self {
+    pub fn new(from: PowerPointIndex, to: PowerPointIndex) -> Self {
         Self { from, to }
     }
 }
@@ -342,7 +353,7 @@ enum PowerPointType {
 #[derive(Debug, Clone)]
 struct PowerPoint {
     name: String,
-    simpoint_index: usize,
+    calcunit_index: usize,
     power: i32,
     powerpoint_type: PowerPointType,
 }
@@ -355,7 +366,7 @@ impl PowerPoint {
     ) -> Self {
         Self {
             name: name.to_string(),
-            simpoint_index,
+            calcunit_index: simpoint_index,
             power,
             powerpoint_type,
         }
@@ -379,7 +390,7 @@ impl Simulation {
 }
 
 ///根据项目json文件，生成连接图。
-fn generate_simulation_info(project: &Circuit) -> Simulation {
+fn generate_simulation_info(project: &Circuit, models: &Vec<Box<dyn ModelObject>>) -> Simulation {
     //TODO 先生成 Vec<Connection>
     let mut simpoints = Vec::<CalculationUnit>::new();
     let mut pps = Vec::<PhysicalPoint>::new();
@@ -401,7 +412,23 @@ fn generate_simulation_info(project: &Circuit) -> Simulation {
         } else {
             wire.end.x
         };
-        for j in (pos_start + 1)..pos_end {
+
+        //首尾添加PowerPoint
+        powerpoints.push(PowerPoint::new(
+            (wiresimp.name.clone() + ".start").as_str(),
+            simpoints.len(),
+            0,
+            PowerPointType::INPUT,
+        ));
+        let start_pp_index = powerpoints.len() - 1;
+        powerpoints.push(PowerPoint::new(
+            (wiresimp.name.clone() + ".end").as_str(),
+            simpoints.len(),
+            0,
+            PowerPointType::OUTPUT,
+        ));
+        let end_pp_index = powerpoints.len() - 1;
+        for j in (pos_start)..(pos_end + 1) {
             pps.push(PhysicalPoint::new(
                 (wiresimp.name.clone() + j.to_string().as_str()).as_str(),
                 simpoints.len(),
@@ -419,57 +446,36 @@ fn generate_simulation_info(project: &Circuit) -> Simulation {
                     },
                 }),
                 //首尾两点特殊类型
-                match j {
-                    pos_start => PointType::ENDING,
-                    pos_end => PointType::ENDING,
-                    _ => PointType::PART_OF_WIRE,
+                if j == pos_start || j == pos_end {
+                    PointType::ENDING
+                } else {
+                    PointType::PART_OF_WIRE
+                },
+                if j == pos_start {
+                    start_pp_index
+                } else if j == pos_end {
+                    end_pp_index
+                } else {
+                    usize::MAX
                 },
             ));
-            //首尾添加PowerPoint
-            if j == pos_start || j == pos_end {
-                powerpoints.push(PowerPoint::new(
-                    (wiresimp.name.clone() + ".start").as_str(),
-                    simpoints.len(),
-                    0,
-                    PowerPointType::INPUT,
-                ));
-                powerpoints.push(PowerPoint::new(
-                    (wiresimp.name.clone() + ".end").as_str(),
-                    simpoints.len(),
-                    0,
-                    PowerPointType::OUTPUT,
-                ));
-            }
         }
+
         simpoints.push(wiresimp);
     }
     for comp in project.components.iter() {
         //每一个元件就是一个点
-        let model_obj = project.imports.iter().find(|&x| x.modelName == comp.model);
+        let model_obj = models.iter().find(|&x| x.get_name() == comp.model);
         if model_obj.is_none() {
             error_begin();
             panic!("model {} not found for component {}", comp.model, comp.name);
         }
-        let model_obj = model_obj.unwrap();
-
-        let realmodel: ComponentModelObject = {
-            let f = OpenOptions::new().read(true).open(&model_obj.path);
-            if f.is_err() {
-                error_begin();
-                panic!("failed to open model file {}", model_obj.path);
-            }
-            let f = f.unwrap();
-            let reader = BufReader::new(f);
-            serde_json::from_reader(reader).unwrap_or_else(|x| {
-                error_begin();
-                panic!("failed to parse model file {}: {}", model_obj.path, x);
-            })
-        };
+        let realmodel = model_obj.unwrap().as_ref();
         //
         let comppoint = CalculationUnit::new(
             &comp.name,
             comp.position.clone(),
-            CalculationUnit::get_func_from_model(&realmodel),
+            CalculationUnit::get_func_from_model(realmodel),
         );
         simpoints.push(comppoint);
         //因为之后的判断线和元件连接是通过位置判断的，所以这里需要把元件的输入输出端口位置计算出来
@@ -479,14 +485,8 @@ fn generate_simulation_info(project: &Circuit) -> Simulation {
          * 一套记录了位置的Point列表，每个Point记录了对应的SimPoint。
          * 然后根据Point连接关系，生成SimPoint的连接关系。
          */
-        for port in realmodel.inputs.iter() {
+        for port in realmodel.get_inputs().iter() {
             let pos = comp.position + port.position;
-            pps.push(PhysicalPoint::new(
-                &(comp.name.clone() + "." + &port.name),
-                simpoints.len() - 1,
-                pos,
-                PointType::ENDING,
-            ));
             //输入端口作为PowerPoint
             powerpoints.push(PowerPoint::new(
                 &(comp.name.clone() + "." + &port.name),
@@ -494,22 +494,32 @@ fn generate_simulation_info(project: &Circuit) -> Simulation {
                 0,
                 PowerPointType::INPUT,
             ));
-        }
-        //add to ports
-        for port in realmodel.outputs.iter() {
-            let pos = comp.position + port.position;
+            let port_pp_index = powerpoints.len() - 1;
             pps.push(PhysicalPoint::new(
                 &(comp.name.clone() + "." + &port.name),
                 simpoints.len() - 1,
                 pos,
                 PointType::ENDING,
+                port_pp_index,
             ));
+        }
+        //add to ports
+        for port in realmodel.get_outputs().iter() {
+            let pos = comp.position + port.position;
             //输出端口作为PowerPoint
             powerpoints.push(PowerPoint::new(
                 &(comp.name.clone() + "." + &port.name),
                 simpoints.len() - 1,
                 0,
                 PowerPointType::OUTPUT,
+            ));
+            let port_pp_index = powerpoints.len() - 1;
+            pps.push(PhysicalPoint::new(
+                &(comp.name.clone() + "." + &port.name),
+                simpoints.len() - 1,
+                pos,
+                PointType::ENDING,
+                port_pp_index,
             ));
         }
     }
@@ -534,10 +544,7 @@ fn generate_simulation_info(project: &Circuit) -> Simulation {
                     && point.point_type == PointType::PART_OF_WIRE)
             {
                 //建立连接
-                cons.push(Connection::new(
-                    simpoints[a.simpoint].clone(),
-                    simpoints[point.simpoint].clone(),
-                ));
+                cons.push(Connection::new(a.powerpoint, point.powerpoint));
                 return true;
             }
             false
@@ -545,6 +552,7 @@ fn generate_simulation_info(project: &Circuit) -> Simulation {
     }
 
     print!("Connections generated:{}\n", cons.len());
+    print!("Powerpoints generated:{}\n", powerpoints.len());
     //完成
     Simulation {
         units: simpoints,
@@ -566,6 +574,7 @@ fn simulate(simulation: &mut Simulation, inputs: SimulationPowerAssign) -> Simul
     根据输入信号，先给部分powerpoint赋值，然后根据连接图进行传播计算，直到所有的powerpoint都被计算过。
     传播计算时，根据CalculationUnit的func属性，进行不同的计算。
      */
+    println!("input assignments:");
     //记录每个PowerPoint的完整路径名
     for (path, power) in inputs.assignments.iter() {
         println!("Input {}: {}", path, power);
@@ -574,11 +583,10 @@ fn simulate(simulation: &mut Simulation, inputs: SimulationPowerAssign) -> Simul
         就像访问结构体变量一样: component.port 或 wire.start/end
         先根据点名找到对应的PowerPoint，然后根据PowerPoint的simpoint_index找到对应的CalculationUnit。
          */
-        let names = path.split('.').collect::<Vec<&str>>();
         let pp_opt = simulation
             .powerpoints
             .iter_mut()
-            .find(|pp| pp.name == names[1] && simulation.units[pp.simpoint_index].name == names[0]);
+            .find(|pp| &pp.name == path);
         if pp_opt.is_none() {
             error_begin();
             panic!(
@@ -590,7 +598,7 @@ fn simulate(simulation: &mut Simulation, inputs: SimulationPowerAssign) -> Simul
         pp.power = power.as_i64().unwrap_or(0) as i32;
     }
     //初值设定完毕，开始传播计算
-    let conmap = generate_connention_map(&simulation.connections);
+    let conmap = generate_connention_map(&simulation.connections, &simulation.powerpoints);
     /*
     计算思路：
     就不考虑先从哪个点开始算起了，直接对所有点进行多轮计算，直到所有点的值都不再变化为止。
@@ -601,32 +609,39 @@ fn simulate(simulation: &mut Simulation, inputs: SimulationPowerAssign) -> Simul
         5. 如果在一轮遍历中没有任何PowerPoint的值发生变化，则结束计算
      */
     let mut changed = false;
+    let powerpoints = &mut simulation.powerpoints;
+    let connections = &simulation.connections;
+    let units = &simulation.units;
     loop {
-        for unit in simulation.units.iter() {
+        for (unit_index, unit) in units.iter().enumerate() {
             println!("Calculating unit {}", unit.name);
             //找到所有连接到这个unit的PowerPoint
-            let mut connected_pps: Vec<&mut PowerPoint> = simulation
-                .powerpoints
-                .iter_mut()
-                .filter(|pp| {
-                    pp.simpoint_index
-                        == simulation
-                            .units
-                            .iter()
-                            .position(|u| u.name == unit.name)
-                            .unwrap()
-                })
-                .collect();
+            //FIXME 有问题，有时候为空
+            let mut connected_pps: Vec<PowerPointIndex> = vec![];
+            for (pp_index, pp) in powerpoints.iter().enumerate() {
+                if pp.calcunit_index == unit_index {
+                    connected_pps.push(pp_index);
+                }
+            }
             let len_before_mapwhile = connected_pps.len();
+            /* println!(
+                "Connected PowerPoints: {}",
+                connected_pps
+                    .iter()
+                    .map(|pp| pp.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ); */
             //输入输出
             let (input_pp, mut output_pp) = {
-                let mut inp = Vec::<&PowerPoint>::new();
-                let mut outp = Vec::<&mut PowerPoint>::new();
-                connected_pps.iter_mut().for_each(|pp| {
+                let mut inp = Vec::new();
+                let mut outp = Vec::new();
+                connected_pps.iter_mut().for_each(|pp_index| {
+                    let pp = powerpoints.get_mut(*pp_index).unwrap();
                     if pp.powerpoint_type == PowerPointType::INPUT {
-                        inp.push(pp);
+                        inp.push(*pp_index);
                     } else {
-                        outp.push(pp);
+                        outp.push(*pp_index);
                     }
                 });
                 (inp, outp)
@@ -637,31 +652,35 @@ fn simulate(simulation: &mut Simulation, inputs: SimulationPowerAssign) -> Simul
                     //直接复制输入到输出
                     output_pp
                         .iter_mut()
-                        .for_each(|pp| pp.power = input_pp[0].power);
-                    println!("  COPY: {} -> {}", input_pp[0].power, output_pp[0].power);
+                        .for_each(|&mut pp| powerpoints[pp].power = powerpoints[input_pp[0]].power);
+                    println!(
+                        "  COPY: {} -> {}",
+                        powerpoints[input_pp[0]].power, powerpoints[output_pp[0]].power
+                    );
                 }
                 SimFuncs::WIRE => {
                     //导线行为，衰减后输出
                     let decay = unit.vars[0] as i32; //导线长度作为衰减值
-                    output_pp.iter_mut().for_each(|pp| {
-                        if pp.power < max(input_pp[0].power - decay, 0) {
-                            pp.power = max(input_pp[0].power - decay, 0);
+                    let input_pp_power = powerpoints[input_pp[0]].power;
+                    let newpower = max(input_pp_power - decay, 0);
+                    output_pp.iter_mut().for_each(|&mut pp| {
+                        let pp = &mut powerpoints[pp];
+                        if pp.power < newpower {
+                            pp.power = newpower;
                             changed = true;
                         }
                     });
-                    println!(
-                        "  WIRE: {} - {} -> {}",
-                        input_pp[0].power, decay, output_pp[0].power
-                    );
+                    println!("  WIRE: {} - {} -> {}", input_pp_power, decay, newpower);
                 }
                 SimFuncs::AND => {
                     //与门，所有输入均为高则输出高
-                    let result = if input_pp.iter().all(|pp| pp.power > 0) {
+                    let result = if input_pp.iter().all(|pp| powerpoints[*pp].power > 0) {
                         15
                     } else {
                         0
                     };
                     output_pp.iter_mut().for_each(|pp| {
+                        let pp = powerpoints.get_mut(*pp).unwrap();
                         if pp.power != result {
                             changed = true;
                         }
@@ -669,18 +688,22 @@ fn simulate(simulation: &mut Simulation, inputs: SimulationPowerAssign) -> Simul
                     });
                     println!(
                         "  AND: inputs {:?} -> {}",
-                        input_pp.iter().map(|pp| pp.power).collect::<Vec<i32>>(),
-                        output_pp[0].power
+                        input_pp
+                            .iter()
+                            .map(|pp| powerpoints[*pp].power)
+                            .collect::<Vec<i32>>(),
+                        powerpoints[output_pp[0]].power
                     );
                 }
                 SimFuncs::OR => {
                     //或门，任一输入为高则输出高
-                    let result = if input_pp.iter().any(|pp| pp.power > 0) {
+                    let result = if input_pp.iter().any(|pp| powerpoints[*pp].power > 0) {
                         15
                     } else {
                         0
                     };
                     output_pp.iter_mut().for_each(|pp| {
+                        let pp = powerpoints.get_mut(*pp).unwrap();
                         if pp.power != result {
                             changed = true;
                         }
@@ -688,14 +711,22 @@ fn simulate(simulation: &mut Simulation, inputs: SimulationPowerAssign) -> Simul
                     });
                     println!(
                         "  OR: inputs {:?} -> {}",
-                        input_pp.iter().map(|pp| pp.power).collect::<Vec<i32>>(),
-                        output_pp[0].power
+                        input_pp
+                            .iter()
+                            .map(|pp| powerpoints[*pp].power)
+                            .collect::<Vec<i32>>(),
+                        powerpoints[output_pp[0]].power
                     );
                 }
                 SimFuncs::NOT => {
                     //非门，输入为高则输出低，输入为低则输出高
-                    let result = if input_pp[0].power > 0 { 0 } else { 15 };
+                    let result = if powerpoints[input_pp[0]].power > 0 {
+                        0
+                    } else {
+                        15
+                    };
                     output_pp.iter_mut().for_each(|pp| {
+                        let pp = powerpoints.get_mut(*pp).unwrap();
                         if pp.power != result {
                             changed = true;
                         }
@@ -703,7 +734,7 @@ fn simulate(simulation: &mut Simulation, inputs: SimulationPowerAssign) -> Simul
                     });
                     println!(
                         "  NOT: input {} -> {}",
-                        input_pp[0].power, output_pp[0].power
+                        powerpoints[input_pp[0]].power, powerpoints[output_pp[0]].power
                     );
                 }
                 _ => {
@@ -711,10 +742,25 @@ fn simulate(simulation: &mut Simulation, inputs: SimulationPowerAssign) -> Simul
                     println!("  Function {:?} not implemented yet", unit.func);
                 }
             }
+            //将直接相连的PowerPoint也进行更新
+            for pp in connected_pps.iter() {
+                let newpower = powerpoints[*pp].power;
+                for c in connections.iter() {
+                    if c.from == *pp || c.to == *pp {
+                        let neighbor_index = if c.from == *pp { c.to } else { c.from };
+                        let neighbor_pp = &mut powerpoints[neighbor_index];
+                        if neighbor_pp.power < newpower {
+                            neighbor_pp.power = newpower;
+                        }
+                    }
+                }
+            }
         }
         if !changed {
             break;
         }
+        changed = false;
+        println!("--- Next Round ---");
     }
     //仿真完毕
     //生成结果
@@ -723,26 +769,30 @@ fn simulate(simulation: &mut Simulation, inputs: SimulationPowerAssign) -> Simul
     };
     for pp in simulation.powerpoints.iter() {
         output.assignments.insert(
-            {
-                let portname = pp.name.clone();
-                let component_name = simulation.units[pp.simpoint_index].name.clone();
-                component_name + "." + &portname
-            },
+            pp.name.clone(),
             Value::Number(serde_json::Number::from(pp.power)),
         );
     }
     output
 }
 
-fn simulate_circuit(circuit: &Circuit, inputs: SimulationPowerAssign) -> SimulationPowerAssign {
-    let mut simulation = generate_simulation_info(circuit);
+fn simulate_circuit(
+    circuit: &Circuit,
+    inputs: SimulationPowerAssign,
+    models: &Vec<Box<dyn ModelObject>>,
+) -> SimulationPowerAssign {
+    let mut simulation = generate_simulation_info(circuit, models);
     simulate(&mut simulation, inputs)
 }
-pub fn do_simulation(circuit: &Circuit, inputs: &str) -> String {
+pub fn do_simulation(
+    circuit: &Circuit,
+    inputs: &str,
+    models: &Vec<Box<dyn ModelObject>>,
+) -> String {
     let assignments =
         serde_json::from_str(inputs).expect("failed reading input json: format incorrect");
-    let out = simulate_circuit(circuit, assignments);
-    serde_json::to_string(&out).expect("fatal: SimulationPowerAssign failed to_string")
+    let out = simulate_circuit(circuit, assignments, models);
+    serde_json::to_string_pretty(&out).expect("fatal: SimulationPowerAssign failed to_string")
 }
 ///计算导线的有效长度，考虑中继器
 fn calc_wire_effective_length(wire: &Wire, project: &Circuit) -> u64 {
@@ -752,45 +802,26 @@ fn calc_wire_effective_length(wire: &Wire, project: &Circuit) -> u64 {
 }
 
 ///根据连接集合生成连接图
-fn generate_connention_map(con_set: &Vec<Connection>) -> HashMap<usize, Vec<usize>> {
-    let mut simpoints = Vec::<CalculationUnit>::new();
-    //先收集所有的SimPoint
-    con_set.iter().for_each(|c| {
-        if !simpoints.contains(&c.from) {
-            simpoints.push(c.from.clone());
-        }
-        if !simpoints.contains(&c.to) {
-            simpoints.push(c.to.clone());
-        }
-    });
+fn generate_connention_map(
+    con_set: &Vec<Connection>,
+    powerpoints: &Vec<PowerPoint>,
+) -> HashMap<PowerPointIndex, Vec<PowerPointIndex>> {
     //现在连接建立完毕，开始生成连接图
     let mut conmap = HashMap::from(
         //先生成空表
-        simpoints
+        powerpoints
             .iter()
             .enumerate()
             .map(|(index, _simp)| (index, Vec::new()))
-            .collect::<HashMap<usize, Vec<usize>>>(),
+            .collect::<HashMap<PowerPointIndex, Vec<PowerPointIndex>>>(),
     );
-    fn index_of(simpoints: &Vec<CalculationUnit>, sim: &CalculationUnit) -> usize {
-        simpoints
-            .iter()
-            .enumerate()
-            .find(|(_, sp)| sp.name == sim.name)
-            .map(|(index, _)| index)
-            .unwrap()
-    }
-    for (i, sim) in simpoints.iter().enumerate() {
+    for (i, pp) in powerpoints.iter().enumerate() {
         con_set.iter().for_each(|c| {
-            if c.from.name == sim.name || c.to.name == sim.name {
+            if c.from == i || c.to == i {
                 conmap
                     .get_mut(&i)
                     .expect("FATAL: conmap does not have the according SimPoint after generating")
-                    .push(if c.from.name == sim.name {
-                        index_of(&simpoints, &c.to)
-                    } else {
-                        index_of(&simpoints, &c.from)
-                    }); //把连接的另一端加入
+                    .push(if c.from == i { c.to } else { c.from }); //把连接的另一端加入
             }
         });
     }

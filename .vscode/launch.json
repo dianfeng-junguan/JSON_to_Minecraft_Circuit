@@ -7,13 +7,13 @@
             "program": "${workspaceFolder}/target/debug/mc_circuit_script.exe",
             "args": [
                 "-i",
-                "lib/and.json",
+                "testch.json",
                 "-o",
                 "and_sim.json",
                 "-s",
                 "sim.json",
                 "-l",
-                "lib"
+                "target/debug/lib"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -23,7 +23,7 @@
                     "value": "1"
                 }
             ],
-            "console": "externalTerminal"
+            "console": "integratedTerminal"
         }
     ]
 }

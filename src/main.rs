@@ -1,6 +1,7 @@
 mod check;
 mod sim;
 mod wiring;
+mod config;
 use ansi_term::Color::{*};
 use clap::Parser;
 use flate2::Compression;
@@ -233,21 +234,6 @@ fn main() {
         error_begin();
         panic!("failed to parse input json file {}:\n{}",&input_json,x.to_string());
     });
-    //TODO 仿真需要输入两个文件: 电路json和输入json
-    //仿真
-    if let Some(simulate_input_path)=args.simulate_input_path {
-        let input_component_model:ComponentModelObject=serde_json::from_reader(BufReader::new(File::open(input_json).expect("failed to open input json file"))).unwrap();
-        let mut inputs=String::new();
-        OpenOptions::new().read(true).open(simulate_input_path).expect("failed to open simulate input file").read_to_string(&mut inputs).expect("failed to read simulate input file");
-        let output_json=do_simulation(&obj, inputs);
-        let mut output_file=OpenOptions::new().write(true).create(true).truncate(true).open(output_path.clone()).unwrap_or_else(|e| {
-            error_begin();
-            panic!("failed to open output json file {}",output_path.clone());
-        });
-        output_file.write(output_json.as_bytes()).expect("failed to write output json file");
-        println!("generated output json file {}",output_path);
-        return;
-    }
     //存放读取的元件和子电路json对象，缓存
     let mut model_objects:Vec<Box<dyn ModelObject>>=vec![];
     let mut schem:Schematic=Schematic::new();
@@ -261,7 +247,7 @@ fn main() {
             }
         };
         let model_type=import_item.modelType.as_str();
-        let rd=OpenOptions::new().read(true)
+        let mut rd=OpenOptions::new().read(true)
         .open(&path).expect(format!("failed to open import file {}",&path).as_str());
         match model_type {
             "component"=>{
@@ -280,6 +266,20 @@ fn main() {
         }
     }
 
+    //TODO 仿真需要输入两个文件: 电路json和输入json
+    //仿真
+    if let Some(simulate_input_path)=args.simulate_input_path {
+        let mut inputs=String::new();
+        OpenOptions::new().read(true).open(simulate_input_path).expect("failed to open simulate input file").read_to_string(&mut inputs).expect("failed to read simulate input file");
+        let output_json=do_simulation(&obj, &inputs,&model_objects);
+        let mut output_file=OpenOptions::new().write(true).create(true).truncate(true).open(output_path.clone()).unwrap_or_else(|e| {
+            error_begin();
+            panic!("failed to open output json file {}",output_path.clone());
+        });
+        output_file.write(output_json.as_bytes()).expect("failed to write output json file");
+        println!("generated output json file {}",output_path);
+        return;
+    }
     
     //检查电路
     if args.check_circuit && !check_circuit(&obj, &model_objects){

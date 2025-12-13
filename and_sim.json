@@ -1,1 +1,20 @@
-{"output":0}
+{
+  "assignments": {
+    "and001.input0": 15,
+    "and001.input1": 15,
+    "and001.output": 15,
+    "and002.input0": 0,
+    "and002.input1": 0,
+    "and002.output": 0,
+    "wire001.end": 0,
+    "wire001.start": 0,
+    "wire002.end": 0,
+    "wire002.start": 0,
+    "wire003.end": 0,
+    "wire003.start": 0,
+    "wire004.end": 0,
+    "wire004.start": 0,
+    "wire005.end": 0,
+    "wire005.start": 0
+  }
+}
